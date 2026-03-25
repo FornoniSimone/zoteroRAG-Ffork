@@ -18,6 +18,9 @@ requests = "^2.32.0"
 grobid-client-python = "^0.1.4"
 torch = "^2.10.0"
 pyyaml = "^6.0"
+sentencepiece = "^0.2.1"
+protobuf = ">=3.20,<6"
+transformers = ">=4.44,<5"
 
 
 [build-system]

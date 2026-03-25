@@ -134,7 +134,6 @@ def main():
         except Exception as e:
             st.error(f"Error loading Zotero: {e}")
             st.info("Make sure Zotero is installed and the database is accessible")
-            st.stop()
     
     # Main tabs - only show after model is loaded and indexed
     if st.session_state.model_loaded and st.session_state.indexed:

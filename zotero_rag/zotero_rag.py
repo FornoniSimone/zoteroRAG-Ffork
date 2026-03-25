@@ -219,7 +219,12 @@ class ZoteroRAG:
             logger.info(f"Index paths set to: {self.indexer.index_path} and {self.indexer.chunks_path}")
         else:
             # Let indexer handle it
-            self.indexer.set_index_paths(self.collection_name, self.output_base_dir)
+            if self.source_type == 'folder' and self.folder_path:
+                source_name = os.path.basename(self.folder_path)
+            else:
+                source_name = self.collection_name
+            
+            self.indexer.set_index_paths(source_name, self.output_base_dir)
     
     def build_index(self, force_rebuild: bool = False, progress_callback=None) -> int:
         """Build or load the FAISS index from Zotero PDFs.

@@ -32,12 +32,12 @@ class QAEngine:
         self.model = None
         self.tokenizer = None
         self.paraphraser = None
-        self.batch_size = batch_size  # Adjust based on available VRAM
+        self.batch_size = batch_size if batch_size is not None else 128
         
         self._load_model_direct()
         if enable_question_expansion:
             self._load_paraphraser()
-            
+
     def _load_model_direct(self):
         """Load model and tokenizer directly for manual batching."""
         try:
@@ -49,13 +49,15 @@ class QAEngine:
             # Load Model in BFloat16 (Crucial for H100 speed)
             self.model = AutoModelForQuestionAnswering.from_pretrained(
                 self.model_name,
-                torch_dtype=torch.bfloat16 if self.device == "cuda" else torch.float32
+                dtype=torch.bfloat16 if self.device == "cuda" else torch.float32 #torch_dtype
             ).to(self.device)
             
-            try:
-                self.model = torch.compile(self.model)
-            except:
-                pass
+            import sys
+            if sys.platform != 'win32':
+                try:
+                    self.model = torch.compile(self.model)
+                except Exception:
+                    pass
 
             logger.info(f"QA Model loaded on {self.device}")
         except Exception as e:
