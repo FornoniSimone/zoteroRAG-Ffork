@@ -1,13 +1,11 @@
-"""FAISS index building and management."""
+"""QdrantManager class for managing Qdrant vector database operations, including collection management, encoding, and upserting paragraphs."""
 
-import os
 import re
+import uuid
 import logging
-import pickle
 from typing import List, Optional
 import numpy as np
 import torch
-import faiss
 import qdrant_client as qc
 from qdrant_client.http import models as qmodels
 from sentence_transformers import SentenceTransformer
@@ -21,6 +19,7 @@ class QdrantManager:
     """Manage Qdrant vector database for storing and searching paragraph embeddings."""
     
     def __init__(self, model_name: str = "BAAI/bge-base-en-v1.5", 
+                 qdrant_url: str = "http://localhost:6333",
                  device: str = None,
                  encode_batch_size: int = 8):
         """Initialize the Qdrant manager.
@@ -31,13 +30,13 @@ class QdrantManager:
             encode_batch_size: Batch size for encoding.
         """
         self.model_name = model_name
+        self.qdrant_url = qdrant_url
         self.device = device or ("mps" if torch.backends.mps.is_available() else "cpu")
         self.encode_batch_size = encode_batch_size
         self.model = SentenceTransformer(model_name, device=self.device)
-        self.index: Optional[faiss.Index] = None
         self.paragraphs: List[Paragraph] = []
-        self.qdrant_client: Optional[qc.QdrantClient] = None
-        self.qdrant_collection: Optional[str] = None
+        self.client: Optional[qc.QdrantClient] = None
+        self.collection_name: Optional[str] = None
     
     @staticmethod
     def _sanitize_model_name(model_name: str) -> str:
@@ -45,7 +44,14 @@ class QdrantManager:
         model_short = model_name.split('/')[-1]
         return re.sub(r'[^a-zA-Z0-9_-]', '_', model_short)
     
-    def qdrant_collection_exists(self, collection_name: str) -> bool:
+    @staticmethod
+    def generate_point_id(file_hash: str, paragraph_index) -> str:
+        """Generate a unique point ID for Qdrant."""
+        input_str = f"{file_hash}_{paragraph_index}"
+        NAMESPACE_RAG = uuid.UUID("12345678-1234-5678-1234-567812345678")
+        return str(uuid.uuid5(NAMESPACE_RAG, input_str))
+    
+    def collection_exists(self, collection_name: Optional[str] = None) -> bool:
         """Check if a Qdrant collection exists.
 
         Args:
@@ -54,26 +60,32 @@ class QdrantManager:
         Returns:
             True if the collection exists, False otherwise.
         """
-        if not self.qdrant_client:
+        if not self.client:
             raise ValueError("Qdrant client is not connected. Call initialize_connection() first.")
 
-        target_collection = collection_name or self.qdrant_collection
+        target_collection = collection_name or self.collection_name
         if not target_collection:
             raise ValueError("Collection name is required.")
-
-        return self.qdrant_client.collection_exists(target_collection)
-    
+        
+        return self.client.collection_exists(target_collection)
+ 
     def initialize_connection(self):
         """Connect to Qdrant client and ensure collection exists.
 
             Args:
                 collection_name: Name of the collection to ensure exists.
         """
-        self.qdrant_client = qc.QdrantClient(
-            host="localhost",
-            port=6333,
+        self.client = qc.QdrantClient(
+            url=self.qdrant_url,
         )
         logger.info("Connected to Qdrant client")
+
+    def close_connection(self):
+        """Disconnect from Qdrant client."""
+        if self.client:
+            self.client.close()
+            self.client = None
+            logger.info("Disconnected from Qdrant client")
 
     def create_collection(self, collection_name: str):
         """Creates Qdrant collection for storing paragraph embeddings,
@@ -82,14 +94,11 @@ class QdrantManager:
             Args:            
                 collection_name: Name of the collection to create or verify.
         """
-        if not self.qdrant_client:
-            raise ValueError("Qdrant client is not connected. Call initialize_connection() first.")
-
         vector_size = self.model.get_sentence_embedding_dimension()
-        exists = self.qdrant_collection_exists(collection_name)
+        exists = self.collection_exists(collection_name)
 
         if not exists:
-            self.qdrant_client.create_collection(
+            self.client.create_collection(
                 collection_name=collection_name,
                 vectors_config=qmodels.VectorParams(
                     size=vector_size,
@@ -97,7 +106,7 @@ class QdrantManager:
                 ),
             )
             logger.info(f"Created Qdrant collection: {collection_name}")
-            self.qdrant_collection = collection_name
+            self.collection_name = collection_name
         else:
             logger.info(f"Qdrant collection already exists: {collection_name}")
     
@@ -151,42 +160,17 @@ class QdrantManager:
         # Hit max size without OOM, use target fraction of max
         return max(start_size, int(last_safe_size * target_memory_fraction))
     
-    def build_index(self, paragraphs: List[Paragraph], 
-                   force_rebuild: bool = False, 
-                   progress_callback=None) -> int:
-        """Build FAISS index from paragraphs.
+    def encode_paragraphs(self, progress_callback, all_texts) -> np.ndarray:
+        """Encode paragraphs into embeddings with dynamic batch size and progress updates.
         
-        Args:
-            paragraphs: List of Paragraph objects to index.
-            force_rebuild: If True, rebuild even if index exists.
-            progress_callback: Function(stage, current, total, message) for progress updates.
-            
-        Returns:
-            Number of paragraphs indexed.
+            Args:
+                progress_callback: Function(stage, current, total, message) for progress updates.
+                all_texts: List of paragraph texts to encode.
+
+            Returns:
+                Numpy array of embeddings.
         """
-        if not self.index_path or not self.chunks_path:
-            raise ValueError("Index paths are not set. Call set_index_paths() first.")
-        
-        # Check if index already exists
-        if not force_rebuild and self.index_exists():
-            if progress_callback:
-                progress_callback('encoding', 1, 1, "Loading existing index...")
-            try:
-                return self.load_index()
-            except ValueError as e:
-                if "Corrupted" in str(e):
-                    logger.warning(f"Detected corrupted index, rebuilding: {e}")
-                    force_rebuild = True
-                else:
-                    raise
-        
-        if not paragraphs:
-            raise ValueError("No paragraphs provided for indexing.")
-        
-        self.paragraphs = paragraphs
-        all_texts = [p.text for p in paragraphs]
-        
-        # Stage 2: Encode chunks with progress tracking
+
         if self.encode_batch_size is None or self.encode_batch_size == 0:
             # Auto-detect safe batch size
             if progress_callback:
@@ -239,39 +223,100 @@ class QdrantManager:
                 progress_callback('encoding', processed, len(all_texts), 
                                 f"Encoded {processed}/{len(all_texts)} chunks...")
         
-        embeddings = np.vstack(embeddings_list)
+        return np.vstack(embeddings_list)
+
+    def upsert_paragraphs(self, paragraphs: List[Paragraph], 
+                        force_rebuild: bool = False, 
+                        progress_callback=None) -> int:
+        """Upsert paragraphs into Qdrant collection.
+
+        Args:
+            paragraphs: List of Paragraph objects to upsert.
+            force_rebuild: If True, deletes the existing collection and creates a new one before upserting.
+            progress_callback: Function(stage, current, total, message) for progress updates.
+
+        Returns:
+            Number of paragraphs upserted.
+        """
+        exists = self.collection_exists(self.collection_name)
+               
+        if force_rebuild and exists:
+            logger.info(f"Force rebuild enabled, deleting existing collection: {self.collection_name}")
+            self.client.delete_collection(self.collection_name)
+            self.create_collection(self.collection_name)
+
+        if not paragraphs:
+            raise ValueError("No paragraphs provided for indexing.")
         
-        # Build index
-        if progress_callback:
-            progress_callback('encoding', len(all_texts), len(all_texts), "Building index...")
+        self.paragraphs = paragraphs
+        all_texts = [p.text for p in paragraphs]
+
+        embeddings = self.encode_paragraphs(progress_callback, all_texts)
         
-        dimension = embeddings.shape[1]
-        self.index = faiss.IndexFlatL2(dimension)
-        self.index.add(np.array(embeddings).astype('float32'))
+        points = []
+        for (para, embedding) in zip(self.paragraphs, embeddings):
+            point_id = self.generate_point_id(para.pdf_path, para.para_idx)
+            point = qmodels.PointStruct(
+                id=point_id,
+                vector=embedding.tolist(),
+                payload={
+                    'text': para.text,
+                    'pdf_path': para.pdf_path,
+                    'page_num': para.page_num,
+                    'para_idx': para.para_idx,
+                    'item_key': para.item_key,
+                    'pdf_hash': para.pdf_hash,
+                    'title': para.title,
+                    'section': para.section,
+                    'sentence_count': para.sentence_count,
+                    'sentences': para.sentences
+                }
+            )
+            points.append(point)
+
+        # Upsert points in batches to avoid memory issues
+        batch_size = 100
+        for i in range(0, len(points), batch_size):
+            batch_points = points[i:i + batch_size]
+            self.client.upsert(
+                collection_name=self.collection_name,
+                points=batch_points
+            )
+            if progress_callback:
+                progress_callback('upserting', min(i + batch_size, len(points)), len(points), 
+                                f"Upserted {min(i + batch_size, len(points))}/{len(points)} paragraphs...")
+        logger.info(f"Upserted {len(points)} paragraphs into Qdrant collection: {self.collection_name}")
+        return len(points)
+    
+    def pdf_already_indexed(self, pdf_hash: str) -> bool:
+        """Check if a pdf with the given pdf file hash is already indexed in Qdrant.
         
-        # Save to disk
-        os.makedirs(os.path.dirname(self.index_path), exist_ok=True)
-        faiss.write_index(self.index, self.index_path)
+        Args:
+            file_hash: Hash of the pdf file to check.
+            
+        Returns:
+            True if the pdf is already indexed, False otherwise.
+        """
+        if not self.collection_exists(self.collection_name):
+            return False
         
-        # Save paragraphs as serializable format
-        paragraphs_data = [
-            {
-                'text': para.text,
-                'pdf_path': para.pdf_path,
-                'page_num': para.page_num,
-                'item_key': para.item_key,
-                'title': para.title,
-                'section': para.section,
-                'sentence_count': para.sentence_count,
-                'sentences': para.sentences
-            }
-            for para in self.paragraphs
-        ]
-        with open(self.chunks_path, 'wb') as f:
-            pickle.dump(paragraphs_data, f)
-        
-        logger.info(f"Index built with {len(self.paragraphs)} paragraphs")
-        return len(self.paragraphs)
+        flt = qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="pdf_hash",
+                    match=qmodels.MatchValue(value=pdf_hash),
+                )
+            ]
+        )
+
+        # Search for any point with a payload containing the file hash
+        result = self.client.count(
+            collection_name=self.collection_name,
+            count_filter=flt,
+            exact=False,
+        )
+
+        return result.count > 0
     
     def search(self, query: str, threshold: float = 2.0) -> List[tuple]:
         """Search the index for relevant paragraphs.
