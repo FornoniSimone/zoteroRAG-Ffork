@@ -14,7 +14,7 @@ from models import Paragraph, Answer
 from zotero_db import ZoteroDatabase
 from folder_source import FolderPDFSource
 from pdf_processor import PDFProcessor
-from indexer import Indexer
+from qdrant_manager import QdrantManager
 from reranker import Reranker
 from qa_engine import QAEngine
 from highlighter import PDFHighlighter
@@ -63,6 +63,7 @@ class ZoteroRAG:
                  reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
                  grobid_url: str = "http://localhost:8070", 
                  grobid_timeout: int = 180,
+                 qdrant_url: str = "http://localhost:6333",
                  model_device: str = None, 
                  encode_batch_size: int = None,
                  qa_batch_size: int = None,
@@ -81,11 +82,12 @@ class ZoteroRAG:
             reranker_model: Name of the cross-encoder model for reranking.
             grobid_url: URL of the GROBID service.
             grobid_timeout: Timeout in seconds for GROBID requests.
+            qdrant_url: URL of the Qdrant service.
             model_device: Device to use for models ('cpu', 'cuda', 'mps'). Auto-detect if None.
             encode_batch_size: Batch size for encoding. If None, auto-detect (targets 75% memory).
             rerank_batch_size: Batch size for reranking. If None, auto-detect (targets 75% memory).
             tei_cache_dir: Directory to cache TEI XML outputs.
-            output_base_dir: Base directory for storing indexes and outputs.
+            output_base_dir: Base directory for storing outputs.
         """
         self.source_type = source_type
         self.collection_name = collection_name
@@ -114,11 +116,13 @@ class ZoteroRAG:
             tei_cache_dir=pdf_cache_dir
         )
         
-        self.indexer = Indexer(
+        self.qdrant_manager = QdrantManager(
             model_name=model_name,
             device=model_device,
             encode_batch_size=encode_batch_size
         )
+        self.qdrant_manager.initialize_connection(url=qdrant_url)
+        self.qdrant_manager.create_collection("zotero_rag") #TODO: capire se voglio nomi diversi
         
         self.reranker = Reranker(
             model_name=reranker_model,
@@ -133,9 +137,6 @@ class ZoteroRAG:
         )
         
         self.highlighter = PDFHighlighter()
-        
-        # Set index paths based on source
-        self.indexer.set_index_paths(source_name, output_base_dir)
         
         # Color management for multi-query highlighting
         self.query_colors = [
@@ -172,23 +173,13 @@ class ZoteroRAG:
     
     @property
     def paragraphs(self):
-        """Access paragraphs from the indexer (backward compatibility)."""
-        return self.indexer.paragraphs
+        """Access paragraphs from the Qdrant Manager (backward compatibility)."""
+        return self.qdrant_manager.paragraphs
     
     @property
-    def index(self):
-        """Access FAISS index from the indexer (backward compatibility)."""
-        return self.indexer.index
-    
-    @property
-    def index_path(self):
-        """Access index path from the indexer (backward compatibility)."""
-        return self.indexer.index_path
-    
-    @property
-    def chunks_path(self):
-        """Access chunks path from the indexer (backward compatibility)."""
-        return self.indexer.chunks_path
+    def client(self):
+        """Access the Qdrant client directly if needed (backward compatibility)."""
+        return self.qdrant_manager.client
     
     def get_query_color(self, query: str) -> Tuple[float, float, float]:
         """Get a consistent color for a query string.
@@ -204,30 +195,9 @@ class ZoteroRAG:
             self.query_color_map[query] = self.query_colors[color_idx]
         return self.query_color_map[query]
     
-    def set_index_paths(self, base_filename: str = None):
-        """Set the file paths for the index and chunks.
-        
-        Args:
-            base_filename: Optional base path/name. If full path provided, uses it.
-                          If just a name, creates in collection directory.
-                          If None, auto-generates from collection and model.
-        """
-        if base_filename and os.path.dirname(base_filename):
-            # Full path provided - extract collection folder and filename
-            self.indexer.index_path = f"{base_filename}.index"
-            self.indexer.chunks_path = f"{base_filename}.pkl"
-            logger.info(f"Index paths set to: {self.indexer.index_path} and {self.indexer.chunks_path}")
-        else:
-            # Let indexer handle it
-            if self.source_type == 'folder' and self.folder_path:
-                source_name = os.path.basename(self.folder_path)
-            else:
-                source_name = self.collection_name
-            
-            self.indexer.set_index_paths(source_name, self.output_base_dir)
-    
-    def build_index(self, force_rebuild: bool = False, progress_callback=None) -> int:
-        """Build or load the FAISS index from Zotero PDFs.
+    def upsert_paragraphs(self, force_rebuild: bool = False, progress_callback=None) -> int:
+        """Process PDFs, extract paragraphs, and upsert into Qdrant index.
+            If a pdf has already been indexed (based on hash), it will be skipped unless force_rebuild is True.
         
         Args:
             force_rebuild: If True, rebuild even if index exists.
@@ -237,12 +207,6 @@ class ZoteroRAG:
         Returns:
             Number of paragraphs indexed.
         """
-        # Check if we can load existing index
-        if not force_rebuild and self.indexer.index_exists():
-            if progress_callback:
-                progress_callback('pdf', 1, 1, "Loading existing index...")
-            return self.indexer.load_index()
-        
         # Get items from source (Zotero or folder)
         items = self.source.get_items(self.collection_name)
         if not items:
@@ -255,13 +219,18 @@ class ZoteroRAG:
             if progress_callback:
                 progress_callback('pdf', idx, len(items), 
                                 f"Processing: {item['title'][:50]}...")
+
+            item_hash = PDFProcessor.compute_pdf_hash()
+            if self.qdrant_manager.pdf_already_indexed(item_hash):
+                logger.info(f"Skipping already indexed PDF: {item['title']}")
+                continue
             
             paragraph_tuples = self.pdf_processor.extract_text_chunks(
                 item['path'], 
                 item['title']
             )
             
-            for text, page_num, section, sentences in paragraph_tuples:
+            for text, page_num, para_idx, section, sentences in paragraph_tuples:
                 # Filter by section type if needed
                 if not self.pdf_processor.CONTENT_SECTIONS.get(section, True):
                     continue
@@ -271,35 +240,27 @@ class ZoteroRAG:
                     text=text,
                     pdf_path=item['path'],
                     page_num=page_num,
+                    para_idx=para_idx,
                     item_key=item['key'],
+                    pdf_hash=item_hash,
                     title=item['title'],
                     section=section,
                     sentence_count=sentence_count,
                     sentences=sentences
                 )
                 all_paragraphs.append(paragraph)
+
+        self.qdrant_manager.close_connection()
         
         if not all_paragraphs:
             raise ValueError("No text could be extracted from the PDFs.")
         
         # Stage 2: Build index
-        return self.indexer.build_index(
+        return self.qdrant_manager.upsert_paragraphs(
             all_paragraphs, 
-            force_rebuild=force_rebuild,
+            force_rebuild=force_rebuild, 
             progress_callback=progress_callback
         )
-    
-    def index_exists(self) -> bool:
-        """Check if the index exists for the current collection."""
-        return self.indexer.index_exists()
-    
-    def load_index(self) -> int:
-        """Load an existing FAISS index from disk.
-        
-        Returns:
-            Number of paragraphs loaded.
-        """
-        return self.indexer.load_index()
     
     def answer_question(self, 
                        question: str, 
@@ -336,8 +297,8 @@ class ZoteroRAG:
         Returns:
             List of Answer objects, deduplicated and sorted by score.
         """
-        if not self.indexer.index:
-            raise ValueError("Index is not built. Call build_index() first.")
+        if not self.qdrant_manager.collection_exists("zotero_rag"): #TODO: capire se voglio nomi diversi
+            raise ValueError("Qdrant collection does not exist. Please run upsert_paragraphs() first.")
         
         # Stage 0: Expand question if enabled and variations not provided
         if question_variations is None:
@@ -356,7 +317,7 @@ class ZoteroRAG:
         seen_paragraphs = set()
         
         for i, q_var in enumerate(question_variations):
-            var_candidates = self.indexer.search(q_var, retrieval_threshold)
+            var_candidates = self.qdrant_manager.search(q_var, retrieval_threshold)
             logger.debug(f"Variation {i}: '{q_var}' -> {len(var_candidates)} candidates")
             
             # Add unseen candidates
@@ -414,7 +375,7 @@ class ZoteroRAG:
         answers = self.qa_engine.extract_answers(
             question,
             reranked,
-            self.indexer.paragraphs,
+            self.qdrant_manager.paragraphs,
             qa_score_threshold=qa_score_threshold,
             color=color,
             progress_callback=progress_callback,

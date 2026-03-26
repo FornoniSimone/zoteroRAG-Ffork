@@ -63,6 +63,23 @@ class PDFProcessor:
             return resp.status_code == 200
         except Exception:
             return False
+        
+    @staticmethod
+    def compute_pdf_hash(pdf_path: str, chunk_size: int = 1024 * 1024) -> str:
+        """Compute a hash of the PDF file for caching and change detection.
+
+        Args:
+            pdf_path: Path to the PDF file.
+            chunk_size: Size of chunks to read for hashing (default 1MB).
+        
+        Returns:
+            Hexadecimal hash string representing the PDF content.
+        """
+        h = hashlib.sha256()
+        with open(pdf_path, "rb") as f:
+            for chunk in iter(lambda: f.read(chunk_size), b""):
+                h.update(chunk)
+        return h.hexdigest()
     
     def parse_pdf(self, pdf_path: str) -> Optional[ET.Element]:
         """Parse a single PDF using GROBID and return TEI XML root.
@@ -145,7 +162,7 @@ class PDFProcessor:
     
     def extract_paragraphs_from_tei(self, tei_root: ET.Element, 
                                      pdf_path: str, 
-                                     item_title: str) -> List[Tuple[str, int, str, List[Tuple[str, str]]]]:
+                                     item_title: str) -> List[Tuple[str, int, int, str, List[Tuple[str, str]]]]:
         """Extract paragraphs from TEI XML structure.
         
         Args:
@@ -154,10 +171,11 @@ class PDFProcessor:
             item_title: Title of the document (for metadata).
             
         Returns:
-            List of (paragraph_text, page_number, section_type, sentences) tuples.
+            List of (paragraph_text, page_number, paragraph_index, section_type, sentences) tuples.
             sentences is a list of (sentence_text, coords) tuples.
         """
         paragraphs = []
+        para_idx = 0
         
         # Define TEI namespace
         ns = {'tei': 'http://www.tei-c.org/ns/1.0'}
@@ -199,7 +217,8 @@ class PDFProcessor:
                 if sentences_with_coords:
                     paragraph_text = ' '.join([sent for sent, _ in sentences_with_coords])
                     if len(paragraph_text.split()) >= 10:
-                        paragraphs.append((paragraph_text, page_num, 'abstract', sentences_with_coords))
+                        paragraphs.append((paragraph_text, page_num, para_idx, 'abstract', sentences_with_coords))
+                        para_idx += 1
         
         # Extract from body (main content)
         body = tei_root.find('.//tei:body', ns)
@@ -257,12 +276,13 @@ class PDFProcessor:
                     if sentences_with_coords:
                         paragraph_text = ' '.join([sent for sent, _ in sentences_with_coords])
                         if len(paragraph_text.split()) >= 10:
-                            paragraphs.append((paragraph_text, page_num, section_type, sentences_with_coords))
+                            paragraphs.append((paragraph_text, page_num, para_idx, section_type, sentences_with_coords))
+                            para_idx += 1
         
         return paragraphs
     
     def extract_text_chunks(self, pdf_path: str, 
-                           item_title: str) -> List[Tuple[str, int, str, List[Tuple[str, str]]]]:
+                           item_title: str) -> List[Tuple[str, int, int, str, List[Tuple[str, str]]]]:
         """Extract paragraphs from PDF using GROBID.
         
         Args:
@@ -270,7 +290,7 @@ class PDFProcessor:
             item_title: Title of the document.
             
         Returns:
-            List of (paragraph_text, page_number, section_type, sentences) tuples.
+            List of (paragraph_text, page_number, paragraph_index, section_type, sentences) tuples.
         """
         tei_root = self.parse_pdf(pdf_path)
         if tei_root is None:

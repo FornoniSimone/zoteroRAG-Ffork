@@ -10,7 +10,9 @@ class Paragraph:
     text: str
     pdf_path: str
     page_num: int
+    para_idx: int
     item_key: str
+    pdf_hash: str
     title: str
     section: str = "body"  # section type: body, abstract, intro, etc.
     sentence_count: int = 0  # number of sentences in this paragraph
@@ -20,8 +22,18 @@ class Paragraph:
         """Custom pickle support for dataclass."""
         return (
             self.__class__,
-            (self.text, self.pdf_path, self.page_num, self.item_key, self.title, 
-             self.section, self.sentence_count, self.sentences)
+            (
+                self.text,
+                self.pdf_path,
+                self.page_num,
+                self.para_idx,
+                self.item_key,
+                self.pdf_hash,
+                self.title,
+                self.section,
+                self.sentence_count,
+                self.sentences,
+            )
         )
 
 
