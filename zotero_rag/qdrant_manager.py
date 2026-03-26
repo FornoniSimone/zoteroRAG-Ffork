@@ -8,6 +8,8 @@ from typing import List, Optional
 import numpy as np
 import torch
 import faiss
+import qdrant_client as qc
+from qdrant_client.http import models as qmodels
 from sentence_transformers import SentenceTransformer
 
 from models import Paragraph
@@ -15,13 +17,13 @@ from models import Paragraph
 logger = logging.getLogger(__name__)
 
 
-class Indexer:
-    """Manages FAISS index building and loading for semantic search."""
+class QdrantManager:
+    """Manage Qdrant vector database for storing and searching paragraph embeddings."""
     
     def __init__(self, model_name: str = "BAAI/bge-base-en-v1.5", 
                  device: str = None,
                  encode_batch_size: int = 8):
-        """Initialize the indexer.
+        """Initialize the Qdrant manager.
         
         Args:
             model_name: Name of the sentence transformer model.
@@ -34,8 +36,8 @@ class Indexer:
         self.model = SentenceTransformer(model_name, device=self.device)
         self.index: Optional[faiss.Index] = None
         self.paragraphs: List[Paragraph] = []
-        self.index_path: Optional[str] = None
-        self.chunks_path: Optional[str] = None
+        self.qdrant_client: Optional[qc.QdrantClient] = None
+        self.qdrant_collection: Optional[str] = None
     
     @staticmethod
     def _sanitize_model_name(model_name: str) -> str:
@@ -43,71 +45,61 @@ class Indexer:
         model_short = model_name.split('/')[-1]
         return re.sub(r'[^a-zA-Z0-9_-]', '_', model_short)
     
-    def set_index_paths(self, collection_name: str, output_base_dir: str = "output"):
-        """Set the file paths for the index and chunks.
-        
+    def qdrant_collection_exists(self, collection_name: str) -> bool:
+        """Check if a Qdrant collection exists.
+
         Args:
-            collection_name: Name of the collection (used for directory structure).
-            output_base_dir: Base directory for storing indexes.
-        """
-        # Sanitize collection name for filesystem
-        coll_folder = re.sub(r'(?u)[^-\w.]', '', 
-                            collection_name.replace(" ", "_").replace("/", "_").replace("\\", "_")) \
-                      if collection_name else "_All_Library"
-        
-        # Create collection-specific directory
-        collection_index_dir = os.path.join(output_base_dir, coll_folder)
-        os.makedirs(collection_index_dir, exist_ok=True)
-        
-        # Generate filename with model info
-        model_name = self._sanitize_model_name(self.model_name)
-        base_filename = f"index_{model_name}"
-        
-        full_base_path = os.path.join(collection_index_dir, base_filename)
-        self.index_path = f"{full_base_path}.index"
-        self.chunks_path = f"{full_base_path}.pkl"
-        
-        logger.info(f"Index paths set to: {self.index_path} and {self.chunks_path}")
-    
-    def index_exists(self) -> bool:
-        """Check if the index and chunks files exist."""
-        if not self.index_path or not self.chunks_path:
-            return False
-        return os.path.exists(self.index_path) and os.path.exists(self.chunks_path)
-    
-    def load_index(self) -> int:
-        """Load an existing FAISS index and chunks from disk.
-        
+            collection_name: Collection name to check. If None, use self.qdrant_collection.
+
         Returns:
-            Number of paragraphs loaded.
+            True if the collection exists, False otherwise.
         """
-        if not self.index_path or not self.chunks_path:
-            raise ValueError("Index paths are not set. Call set_index_paths() first.")
-        if not self.index_exists():
-            raise FileNotFoundError(f"Index file not found at {self.index_path}")
+        if not self.qdrant_client:
+            raise ValueError("Qdrant client is not connected. Call initialize_connection() first.")
+
+        target_collection = collection_name or self.qdrant_collection
+        if not target_collection:
+            raise ValueError("Collection name is required.")
+
+        return self.qdrant_client.collection_exists(target_collection)
+    
+    def initialize_connection(self):
+        """Connect to Qdrant client and ensure collection exists.
+
+            Args:
+                collection_name: Name of the collection to ensure exists.
+        """
+        self.qdrant_client = qc.QdrantClient(
+            host="localhost",
+            port=6333,
+        )
+        logger.info("Connected to Qdrant client")
+
+    def create_collection(self, collection_name: str):
+        """Creates Qdrant collection for storing paragraph embeddings,
+            if it doesn't already exist.
         
-        try:
-            self.index = faiss.read_index(self.index_path)
-            with open(self.chunks_path, 'rb') as f:
-                paragraphs_data = pickle.load(f)
-        except (EOFError, pickle.UnpicklingError) as e:
-            raise ValueError(f"Corrupted index files detected. Please rebuild the index. Error: {e}")
-        
-        # Convert back to Paragraph objects
-        self.paragraphs = [
-            Paragraph(
-                text=item['text'],
-                pdf_path=item['pdf_path'],
-                page_num=item['page_num'],
-                item_key=item['item_key'],
-                title=item['title'],
-                section=item.get('section', 'body'),
-                sentence_count=item.get('sentence_count', 0),
-                sentences=item.get('sentences', [])
+            Args:            
+                collection_name: Name of the collection to create or verify.
+        """
+        if not self.qdrant_client:
+            raise ValueError("Qdrant client is not connected. Call initialize_connection() first.")
+
+        vector_size = self.model.get_sentence_embedding_dimension()
+        exists = self.qdrant_collection_exists(collection_name)
+
+        if not exists:
+            self.qdrant_client.create_collection(
+                collection_name=collection_name,
+                vectors_config=qmodels.VectorParams(
+                    size=vector_size,
+                    distance=qmodels.Distance.COSINE
+                ),
             )
-            for item in paragraphs_data
-        ]
-        return len(self.paragraphs)
+            logger.info(f"Created Qdrant collection: {collection_name}")
+            self.qdrant_collection = collection_name
+        else:
+            logger.info(f"Qdrant collection already exists: {collection_name}")
     
     def _find_safe_batch_size(self, sample_texts: List[str], 
                               start_size: int = 2, 
