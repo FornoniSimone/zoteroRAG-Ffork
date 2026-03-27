@@ -122,6 +122,8 @@ class ZoteroRAG:
             device=model_device,
             encode_batch_size=encode_batch_size
         )
+        self.qdrant_manager.initialize_connection(url=qdrant_url)
+        self.qdrant_manager.create_collection("zotero_rag") #TODO: capire se voglio nomi diversi
         
         self.reranker = Reranker(
             model_name=reranker_model,
