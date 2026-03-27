@@ -50,24 +50,6 @@ class QdrantManager:
         input_str = f"{file_hash}_{paragraph_index}"
         NAMESPACE_RAG = uuid.UUID("12345678-1234-5678-1234-567812345678")
         return str(uuid.uuid5(NAMESPACE_RAG, input_str))
-    
-    def collection_exists(self, collection_name: Optional[str] = None) -> bool:
-        """Check if a Qdrant collection exists.
-
-        Args:
-            collection_name: Collection name to check. If None, use self.qdrant_collection.
-
-        Returns:
-            True if the collection exists, False otherwise.
-        """
-        if not self.client:
-            raise ValueError("Qdrant client is not connected. Call initialize_connection() first.")
-
-        target_collection = collection_name or self.collection_name
-        if not target_collection:
-            raise ValueError("Collection name is required.")
-        
-        return self.client.collection_exists(target_collection)
  
     def initialize_connection(self):
         """Connect to Qdrant client and ensure collection exists.
@@ -88,16 +70,17 @@ class QdrantManager:
             logger.info("Disconnected from Qdrant client")
 
     def create_collection(self, collection_name: str):
-        """Creates Qdrant collection for storing paragraph embeddings,
-            if it doesn't already exist.
+        """Creates Qdrant collection for storing paragraph embeddings, if it doesn't already exist.
         
             Args:            
                 collection_name: Name of the collection to create or verify.
         """
-        vector_size = self.model.get_sentence_embedding_dimension()
-        exists = self.collection_exists(collection_name)
+        if not self.client:
+            raise ValueError("Qdrant client is not connected. Call initialize_connection() first.")
 
-        if not exists:
+        vector_size = self.model.get_sentence_embedding_dimension()
+
+        if not self.client.collection_exists(collection_name):
             self.client.create_collection(
                 collection_name=collection_name,
                 vectors_config=qmodels.VectorParams(
@@ -106,9 +89,9 @@ class QdrantManager:
                 ),
             )
             logger.info(f"Created Qdrant collection: {collection_name}")
-            self.collection_name = collection_name
         else:
             logger.info(f"Qdrant collection already exists: {collection_name}")
+        self.collection_name = collection_name
     
     def _find_safe_batch_size(self, sample_texts: List[str], 
                               start_size: int = 2, 
@@ -170,6 +153,8 @@ class QdrantManager:
             Returns:
                 Numpy array of embeddings.
         """
+        if not self.model:
+            raise ValueError("Model is not loaded. Cannot encode paragraphs.")
 
         if self.encode_batch_size is None or self.encode_batch_size == 0:
             # Auto-detect safe batch size
@@ -238,9 +223,13 @@ class QdrantManager:
         Returns:
             Number of paragraphs upserted.
         """
-        exists = self.collection_exists(self.collection_name)
-               
-        if force_rebuild and exists:
+        if not self.client:
+            raise ValueError("Qdrant client is not connected. Call initialize_connection() first.")
+        
+        if not self.collection_name :
+            raise ValueError("Collection name is not set. Call create_collection() first.")
+
+        if force_rebuild:
             logger.info(f"Force rebuild enabled, deleting existing collection: {self.collection_name}")
             self.client.delete_collection(self.collection_name)
             self.create_collection(self.collection_name)
@@ -252,7 +241,6 @@ class QdrantManager:
         all_texts = [p.text for p in paragraphs]
 
         embeddings = self.encode_paragraphs(progress_callback, all_texts)
-        
         points = []
         for (para, embedding) in zip(self.paragraphs, embeddings):
             point_id = self.generate_point_id(para.pdf_path, para.para_idx)
@@ -297,8 +285,11 @@ class QdrantManager:
         Returns:
             True if the pdf is already indexed, False otherwise.
         """
-        if not self.collection_exists(self.collection_name):
-            return False
+        if not self.client:
+            raise ValueError("Qdrant client is not connected. Call initialize_connection() first.")
+        
+        if not self.collection_name:
+            raise ValueError("Collection name is not set. Call create_collection() first.")
         
         flt = qmodels.Filter(
             must=[
@@ -310,13 +301,14 @@ class QdrantManager:
         )
 
         # Search for any point with a payload containing the file hash
-        result = self.client.count(
+        points, _ = self.client.scroll(
             collection_name=self.collection_name,
-            count_filter=flt,
-            exact=False,
+            scroll_filter=flt,
+            limit=1,
+            with_payload=False,
+            with_vectors=False
         )
-
-        return result.count > 0
+        return len(points) > 0
     
     def search(self, query: str, threshold: float = 2.0) -> List[tuple]:
         """Search the index for relevant paragraphs.

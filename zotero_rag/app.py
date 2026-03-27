@@ -26,28 +26,6 @@ def _sanitize_model_name(model_name: str) -> str:
     model_short = model_name.split('/')[-1]
     return re.sub(r'[^a-zA-Z0-9_-]', '_', model_short)
 
-def find_saved_indexes(collection_name: str, model_name: str = None, base_dir: str = "output") -> List[str]:
-    """Finds all saved index files within the collection's dedicated folder."""
-    collection_folder_name = _sanitize_filename(collection_name)
-    index_dir = os.path.join(base_dir, collection_folder_name)
-
-    if not os.path.isdir(index_dir):
-        return []
-
-    found_files = []
-    model_suffix = f"_{_sanitize_model_name(model_name)}" if model_name else ""
-    
-    for f in os.listdir(index_dir):
-        if f.endswith('.index'):
-            # If model specified, only return indexes for that model
-            if model_name and model_suffix not in f:
-                continue
-            base_name = os.path.splitext(f)[0]
-            full_path_base = os.path.join(index_dir, base_name)
-            found_files.append(full_path_base)
-    
-    return sorted([os.path.basename(f) for f in found_files])
-
 def rgb_to_hex(rgb):
     """Convert RGB tuple (0-1) to hex color"""
     r, g, b = [int(x * 255) for x in rgb]
@@ -352,116 +330,73 @@ def show_setup_tab():
     if st.session_state.model_loaded:
         st.subheader("4️⃣ Build/Load Index")
         
-        # Determine source name for index lookup
-        if st.session_state.source_type == 'folder':
-            source_name = os.path.basename(st.session_state.folder_path) if st.session_state.folder_path else "folder"
-        else:
-            source_name = st.session_state.collection_name
-        
-        # Check for existing indexes
-        existing_indexes = find_saved_indexes(
-            source_name,
-            st.session_state.model_name,
-            base_dir=st.session_state.output_dir
-        )
-        
-        if existing_indexes and not st.session_state.indexed:
-            st.info(f"Found {len(existing_indexes)} existing index(es) for this source and model")
+        # # Show current status
+        #if st.session_state.indexed:
+        #     st.success(f"✅ **Index loaded:** {len(st.session_state.rag.paragraphs)} paragraphs")
+        #     st.info(f"📁 Path: {st.session_state.rag.index_path}")
             
-            # Auto-load first index
-            with st.spinner("Loading existing index..."):
-                try:
-                    # Use source name instead of collection name
-                    if st.session_state.source_type == 'folder':
-                        source_folder_name = _sanitize_filename(os.path.basename(st.session_state.folder_path))
-                    else:
-                        source_folder_name = _sanitize_filename(st.session_state.rag.collection_name)
+        #     # Force reindex button
+        #     if st.button("🔄 Force Reindex", type="secondary", use_container_width=True):
+        #         with st.spinner("Rebuilding index..."):
+        #             pdf_progress_bar = st.progress(0)
+        #             encoding_progress_bar = st.progress(0)
                     
-                    first_index = existing_indexes[0]
-                    index_base_path = os.path.join(st.session_state.output_dir, source_folder_name, first_index)
+        #             def progress_callback(stage, current, total, message):
+        #                 if stage == 'pdf':
+        #                     progress = current / total if total > 0 else 0
+        #                     pdf_progress_bar.progress(progress, text=message)
+        #                 elif stage == 'encoding':
+        #                     progress = current / total if total > 0 else 0
+        #                     encoding_progress_bar.progress(progress, text=message)
                     
-                    st.session_state.rag.set_index_paths(index_base_path)
-                    num_chunks = st.session_state.rag.load_index()
-                    st.session_state.indexed = True
-                    st.success(f"✅ Loaded index with {num_chunks} chunks")
-                    st.rerun()
-                except ValueError as e:
-                    if "Corrupted" in str(e):
-                        st.warning(f"⚠️ {e}")
-                        st.info("The index files appear to be corrupted. Please rebuild the index below.")
-                    else:
-                        st.warning(f"Could not auto-load index: {e}")
-                except Exception as e:
-                    st.warning(f"Could not auto-load index: {e}")
-        
-        # Show current status
-        if st.session_state.indexed:
-            st.success(f"✅ **Index loaded:** {len(st.session_state.rag.paragraphs)} paragraphs")
-            st.info(f"📁 Path: {st.session_state.rag.index_path}")
-            
-            # Force reindex button
-            if st.button("🔄 Force Reindex", type="secondary", use_container_width=True):
-                with st.spinner("Rebuilding index..."):
-                    pdf_progress_bar = st.progress(0)
-                    encoding_progress_bar = st.progress(0)
-                    
-                    def progress_callback(stage, current, total, message):
-                        if stage == 'pdf':
-                            progress = current / total if total > 0 else 0
-                            pdf_progress_bar.progress(progress, text=message)
-                        elif stage == 'encoding':
-                            progress = current / total if total > 0 else 0
-                            encoding_progress_bar.progress(progress, text=message)
-                    
-                    try:
-                        st.session_state.rag.set_index_paths()
-                        num_chunks = st.session_state.rag.build_index(
-                            force_rebuild=True,
-                            progress_callback=progress_callback
-                        )
+        #             try:
+        #                 st.session_state.rag.set_index_paths()
+        #                 num_chunks = st.session_state.rag.build_index(
+        #                     force_rebuild=True,
+        #                     progress_callback=progress_callback
+        #                 )
                         
-                        pdf_progress_bar.empty()
-                        encoding_progress_bar.empty()
+        #                 pdf_progress_bar.empty()
+        #                 encoding_progress_bar.empty()
                         
-                        st.success(f"✅ Index rebuilt with {num_chunks} chunks!")
-                        st.rerun()
-                    except Exception as e:
-                        pdf_progress_bar.empty()
-                        encoding_progress_bar.empty()
-                        st.error(f"Error rebuilding index: {e}")
-        else:
-            # Build new index
-            st.warning("⚠️ No index loaded. Please build an index to continue.")
+        #                 st.success(f"✅ Index rebuilt with {num_chunks} chunks!")
+        #                 st.rerun()
+        #             except Exception as e:
+        #                 pdf_progress_bar.empty()
+        #                 encoding_progress_bar.empty()
+        #                 st.error(f"Error rebuilding index: {e}")
+        #else:
+        # Build new index
+        st.warning("⚠️ No index loaded. Please build an index to continue.")
+        
+        if st.button("🔨 Build Index", type="primary", use_container_width=True):
+            pdf_progress_bar = st.progress(0)
+            encoding_progress_bar = st.progress(0)
             
-            if st.button("🔨 Build Index", type="primary", use_container_width=True):
-                pdf_progress_bar = st.progress(0)
-                encoding_progress_bar = st.progress(0)
-                
-                def progress_callback(stage, current, total, message):
-                    if stage == 'pdf':
-                        progress = current / total if total > 0 else 0
-                        pdf_progress_bar.progress(progress, text=message)
-                    elif stage == 'encoding':
-                        progress = current / total if total > 0 else 0
-                        encoding_progress_bar.progress(progress, text=message)
-                
-                try:
-                    st.session_state.rag.set_index_paths()
-                    num_chunks = st.session_state.rag.build_index(
-                        force_rebuild=False,
-                        progress_callback=progress_callback
-                    )
-                    st.session_state.indexed = True
-                    pdf_progress_bar.empty()
-                    encoding_progress_bar.empty()
-                    st.success(f"✅ Built index with {num_chunks} chunks!")
-                    st.rerun()
-                except Exception as e:
-                    pdf_progress_bar.empty()
-                    encoding_progress_bar.empty()
-                    st.error(f"Error building index: {e}")
-                    with st.expander("Show full error"):
-                        st.exception(e)
+            def progress_callback(stage, current, total, message):
+                if stage == 'pdf':
+                    progress = current / total if total > 0 else 0
+                    pdf_progress_bar.progress(progress, text=message)
+                elif stage == 'encoding':
+                    progress = current / total if total > 0 else 0
+                    encoding_progress_bar.progress(progress, text=message)
+            
+            try:
+                num_chunks = st.session_state.rag.upsert_paragraphs(
+                    force_rebuild=False,
+                    progress_callback=progress_callback
+                )
+                st.session_state.indexed = True
+                pdf_progress_bar.empty()
+                encoding_progress_bar.empty()
+                st.success(f"✅ Built index with {num_chunks} chunks!")
+                st.rerun()
+            except Exception as e:
+                pdf_progress_bar.empty()
+                encoding_progress_bar.empty()
+                st.error(f"Error building index: {e}")
+                with st.expander("Show full error"):
+                    st.exception(e)
     else:
         st.info("👆 Please load a model first")
     

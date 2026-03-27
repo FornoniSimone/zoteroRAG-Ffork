@@ -122,8 +122,6 @@ class ZoteroRAG:
             device=model_device,
             encode_batch_size=encode_batch_size
         )
-        self.qdrant_manager.initialize_connection(url=qdrant_url)
-        self.qdrant_manager.create_collection("zotero_rag") #TODO: capire se voglio nomi diversi
         
         self.reranker = Reranker(
             model_name=reranker_model,
@@ -213,58 +211,70 @@ class ZoteroRAG:
         if not items:
             source_desc = f"folder {self.folder_path}" if self.source_type == 'folder' else "Zotero collection/library"
             raise ValueError(f"No PDF items found in the specified {source_desc}.")
-        
-        self.qdrant_manager.initialize_connection()
-        self.qdrant_manager.create_collection("zotero_rag") #TODO: capire se voglio nomi diversi
-        
-        # Stage 1: Process PDFs and extract paragraphs
-        all_paragraphs = []
-        for idx, item in enumerate(items):
-            if progress_callback:
-                progress_callback('pdf', idx, len(items), 
-                                f"Processing: {item['title'][:50]}...")
 
-            item_hash = PDFProcessor.compute_pdf_hash()
-            if self.qdrant_manager.pdf_already_indexed(item_hash):
-                logger.info(f"Skipping already indexed PDF: {item['title']}")
-                continue
+        indexed = 0
+        already_indexed = 0
+        try:
+            self.qdrant_manager.initialize_connection()
+            self.qdrant_manager.create_collection("zotero_rag") #TODO: capire se voglio nomi diversi
             
-            paragraph_tuples = self.pdf_processor.extract_text_chunks(
-                item['path'], 
-                item['title']
-            )
-            
-            for text, page_num, para_idx, section, sentences in paragraph_tuples:
-                # Filter by section type if needed
-                if not self.pdf_processor.CONTENT_SECTIONS.get(section, True):
+            # Stage 1: Process PDFs and extract paragraphs
+            all_paragraphs = []
+            for idx, item in enumerate(items):
+                if progress_callback:
+                    progress_callback('pdf', idx, len(items), 
+                                    f"Processing: {item['title'][:50]}...")
+                
+                item_hash = PDFProcessor.compute_pdf_hash(item.get('path'))
+                if self.qdrant_manager.pdf_already_indexed(item_hash):
+                    already_indexed += 1
+                    logger.info(f"Skipping already indexed PDF: {item['title']}")
                     continue
-                    
-                sentence_count = len(sentences)
-                paragraph = Paragraph(
-                    text=text,
-                    pdf_path=item['path'],
-                    page_num=page_num,
-                    para_idx=para_idx,
-                    item_key=item['key'],
-                    pdf_hash=item_hash,
-                    title=item['title'],
-                    section=section,
-                    sentence_count=sentence_count,
-                    sentences=sentences
+                
+                paragraph_tuples = self.pdf_processor.extract_text_chunks(
+                    item['path'], 
+                    item['title']
                 )
-                all_paragraphs.append(paragraph)
+                
+                for text, page_num, para_idx, section, sentences in paragraph_tuples:
+                    # Filter by section type if needed
+                    if not self.pdf_processor.CONTENT_SECTIONS.get(section, True):
+                        continue
+                        
+                    sentence_count = len(sentences)
+                    paragraph = Paragraph(
+                        text=text,
+                        pdf_path=item['path'],
+                        page_num=page_num,
+                        para_idx=para_idx,
+                        item_key=item['key'],
+                        pdf_hash=item_hash,
+                        title=item['title'],
+                        section=section,
+                        sentence_count=sentence_count,
+                        sentences=sentences
+                    )
+                    all_paragraphs.append(paragraph)
+            
+            if not all_paragraphs and len(items) - already_indexed > 0:
+                raise ValueError("No text could be extracted from the PDFs.")
+            elif not all_paragraphs:
+                #TODO: far vedere anche all'utente, in generale anche quanti pdf sono stati processati e quanti saltati per essere già indicizzati
+                logger.info("No new paragraphs to index. All PDFs were already indexed.")
+                return 0
+            
+            # Stage 2: Build index
+            indexed = self.qdrant_manager.upsert_paragraphs(
+                all_paragraphs, 
+                force_rebuild=force_rebuild, 
+                progress_callback=progress_callback
+            )
+        except Exception as e:
+            logger.error(f"Error during upsert_paragraphs: {str(e)}")
+        finally:
+            self.qdrant_manager.close_connection()
 
-        self.qdrant_manager.close_connection()
-        
-        if not all_paragraphs:
-            raise ValueError("No text could be extracted from the PDFs.")
-        
-        # Stage 2: Build index
-        return self.qdrant_manager.upsert_paragraphs(
-            all_paragraphs, 
-            force_rebuild=force_rebuild, 
-            progress_callback=progress_callback
-        )
+        return indexed
     
     def answer_question(self, 
                        question: str, 
