@@ -3,7 +3,7 @@
 import re
 import uuid
 import logging
-from typing import List, Optional
+from typing import List, Optional, Dict
 import numpy as np
 import torch
 import qdrant_client as qc
@@ -31,12 +31,12 @@ class QdrantManager:
         """
         self.model_name = model_name
         self.qdrant_url = qdrant_url
+        self.qdrant_collection = "zoteroRAG_" + self._sanitize_model_name(model_name)
         self.device = device or ("mps" if torch.backends.mps.is_available() else "cpu")
         self.encode_batch_size = encode_batch_size
         self.model = SentenceTransformer(model_name, device=self.device)
         self.paragraphs: List[Paragraph] = []
         self.client: Optional[qc.QdrantClient] = None
-        self.collection_name: Optional[str] = None
     
     @staticmethod
     def _sanitize_model_name(model_name: str) -> str:
@@ -52,15 +52,37 @@ class QdrantManager:
         return str(uuid.uuid5(NAMESPACE_RAG, input_str))
  
     def initialize_connection(self):
-        """Connect to Qdrant client and ensure collection exists.
-
-            Args:
-                collection_name: Name of the collection to ensure exists.
-        """
+        """Connect to Qdrant client and ensure collection exists."""
         self.client = qc.QdrantClient(
             url=self.qdrant_url,
         )
+
+        if not self.client:
+            raise ValueError("Qdrant client is not connected. Call initialize_connection() first.")
+        
         logger.info("Connected to Qdrant client")
+        
+        vector_size = self.model.get_sentence_embedding_dimension()
+
+        if not self.client.collection_exists(self.qdrant_collection):
+            self.client.create_collection(
+                collection_name=self.qdrant_collection,
+                vectors_config=qmodels.VectorParams(
+                    size=vector_size,
+                    distance=qmodels.Distance.COSINE
+                ),
+            )
+
+            # Create an index on the 'pdf_hash' payload field for efficient lookups
+            self.client.create_payload_index(
+                collection_name=self.qdrant_collection,
+                field_name="pdf_hash",
+                field_schema=qmodels.PayloadSchemaType.KEYWORD,
+            )
+
+            logger.info(f"Created Qdrant collection: {self.qdrant_collection}")
+        else:
+            logger.info(f"Qdrant collection already exists: {self.qdrant_collection}")
 
     def close_connection(self):
         """Disconnect from Qdrant client."""
@@ -69,30 +91,6 @@ class QdrantManager:
             self.client = None
             logger.info("Disconnected from Qdrant client")
 
-    def create_collection(self, collection_name: str):
-        """Creates Qdrant collection for storing paragraph embeddings, if it doesn't already exist.
-        
-            Args:            
-                collection_name: Name of the collection to create or verify.
-        """
-        if not self.client:
-            raise ValueError("Qdrant client is not connected. Call initialize_connection() first.")
-
-        vector_size = self.model.get_sentence_embedding_dimension()
-
-        if not self.client.collection_exists(collection_name):
-            self.client.create_collection(
-                collection_name=collection_name,
-                vectors_config=qmodels.VectorParams(
-                    size=vector_size,
-                    distance=qmodels.Distance.COSINE
-                ),
-            )
-            logger.info(f"Created Qdrant collection: {collection_name}")
-        else:
-            logger.info(f"Qdrant collection already exists: {collection_name}")
-        self.collection_name = collection_name
-    
     def _find_safe_batch_size(self, sample_texts: List[str], 
                               start_size: int = 2, 
                               max_size: int = 128,
@@ -142,6 +140,35 @@ class QdrantManager:
         
         # Hit max size without OOM, use target fraction of max
         return max(start_size, int(last_safe_size * target_memory_fraction))
+    
+    #TODO: sistemare il magic number 1000
+    def list_indexed_pdfs(self) -> List[Dict]:
+        """List PDFs that have been indexed in Qdrant.
+        
+        Returns:
+            List of dictionaries with 'pdf_path', 'title', 'pdf_hash' keys.
+        """
+        if not self.client:
+            raise ValueError("Qdrant client is not connected. Call initialize_connection() first.")
+        
+        results = self.client.scroll(
+            collection_name=self.qdrant_collection,
+            limit=1000,
+            with_payload=["title", "pdf_path", "pdf_hash"],
+            with_vectors=False,
+            group_by="pdf_hash"
+        )
+        
+        indexed_pdfs = [
+            {
+                "title": group.hits[0].payload.get("title", "Unknown Title"),
+                "pdf_path": group.hits[0].payload.get("pdf_path", "Unknown Path"),
+                "hash": group.id,
+            }
+            for group in results[0].groups
+        ]
+    
+        return indexed_pdfs
     
     def encode_paragraphs(self, progress_callback, all_texts) -> np.ndarray:
         """Encode paragraphs into embeddings with dynamic batch size and progress updates.
@@ -211,13 +238,11 @@ class QdrantManager:
         return np.vstack(embeddings_list)
 
     def upsert_paragraphs(self, paragraphs: List[Paragraph], 
-                        force_rebuild: bool = False, 
                         progress_callback=None) -> int:
         """Upsert paragraphs into Qdrant collection.
 
         Args:
             paragraphs: List of Paragraph objects to upsert.
-            force_rebuild: If True, deletes the existing collection and creates a new one before upserting.
             progress_callback: Function(stage, current, total, message) for progress updates.
 
         Returns:
@@ -225,14 +250,6 @@ class QdrantManager:
         """
         if not self.client:
             raise ValueError("Qdrant client is not connected. Call initialize_connection() first.")
-        
-        if not self.collection_name :
-            raise ValueError("Collection name is not set. Call create_collection() first.")
-
-        if force_rebuild:
-            logger.info(f"Force rebuild enabled, deleting existing collection: {self.collection_name}")
-            self.client.delete_collection(self.collection_name)
-            self.create_collection(self.collection_name)
 
         if not paragraphs:
             raise ValueError("No paragraphs provided for indexing.")
@@ -267,16 +284,16 @@ class QdrantManager:
         for i in range(0, len(points), batch_size):
             batch_points = points[i:i + batch_size]
             self.client.upsert(
-                collection_name=self.collection_name,
+                collection_name=self.qdrant_collection,
                 points=batch_points
             )
             if progress_callback:
                 progress_callback('upserting', min(i + batch_size, len(points)), len(points), 
                                 f"Upserted {min(i + batch_size, len(points))}/{len(points)} paragraphs...")
-        logger.info(f"Upserted {len(points)} paragraphs into Qdrant collection: {self.collection_name}")
+        logger.info(f"Upserted {len(points)} paragraphs into Qdrant collection: {self.qdrant_collection}")
         return len(points)
     
-    def pdf_already_indexed(self, pdf_hash: str) -> bool:
+    def is_pdf_indexed(self, pdf_hash: str) -> bool:
         """Check if a pdf with the given pdf file hash is already indexed in Qdrant.
         
         Args:
@@ -287,9 +304,6 @@ class QdrantManager:
         """
         if not self.client:
             raise ValueError("Qdrant client is not connected. Call initialize_connection() first.")
-        
-        if not self.collection_name:
-            raise ValueError("Collection name is not set. Call create_collection() first.")
         
         flt = qmodels.Filter(
             must=[
@@ -302,7 +316,7 @@ class QdrantManager:
 
         # Search for any point with a payload containing the file hash
         points, _ = self.client.scroll(
-            collection_name=self.collection_name,
+            collection_name=self.qdrant_collection,
             scroll_filter=flt,
             limit=1,
             with_payload=False,

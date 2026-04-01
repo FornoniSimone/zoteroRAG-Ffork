@@ -194,12 +194,19 @@ class ZoteroRAG:
             self.query_color_map[query] = self.query_colors[color_idx]
         return self.query_color_map[query]
     
-    def upsert_paragraphs(self, force_rebuild: bool = False, progress_callback=None) -> int:
+    def get_indexed_pdfs(self) -> List[Dict]:
+        """Get a list of indexed PDFs with their metadata.
+        
+        Returns:
+            List of dictionaries with 'pdf_path', 'title', 'item_key', and 'pdf_hash'.
+        """
+        return self.qdrant_manager.list_indexed_pdfs()
+
+    def upsert_pdfs(self, progress_callback=None) -> int:
         """Process PDFs, extract paragraphs, and upsert into Qdrant index.
-            If a pdf has already been indexed (based on hash), it will be skipped unless force_rebuild is True.
+            If a pdf has already been indexed (based on hash), it will be skipped.
         
         Args:
-            force_rebuild: If True, rebuild even if index exists.
             progress_callback: Function(stage, current, total, message) for progress updates.
                              stage is 'pdf' or 'encoding'.
                              
@@ -216,7 +223,6 @@ class ZoteroRAG:
         already_indexed = 0
         try:
             self.qdrant_manager.initialize_connection()
-            self.qdrant_manager.create_collection("zotero_rag") #TODO: capire se voglio nomi diversi
             
             # Stage 1: Process PDFs and extract paragraphs
             all_paragraphs = []
@@ -226,7 +232,7 @@ class ZoteroRAG:
                                     f"Processing: {item['title'][:50]}...")
                 
                 item_hash = PDFProcessor.compute_pdf_hash(item.get('path'))
-                if self.qdrant_manager.pdf_already_indexed(item_hash):
+                if self.qdrant_manager.is_pdf_indexed(item_hash):
                     already_indexed += 1
                     logger.info(f"Skipping already indexed PDF: {item['title']}")
                     continue
@@ -266,7 +272,6 @@ class ZoteroRAG:
             # Stage 2: Build index
             indexed = self.qdrant_manager.upsert_paragraphs(
                 all_paragraphs, 
-                force_rebuild=force_rebuild, 
                 progress_callback=progress_callback
             )
         except Exception as e:

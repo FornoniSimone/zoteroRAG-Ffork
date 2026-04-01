@@ -31,6 +31,33 @@ def rgb_to_hex(rgb):
     r, g, b = [int(x * 255) for x in rgb]
     return f'#{r:02x}{g:02x}{b:02x}'
 
+def load_zotero_collections():
+    try:
+        with st.spinner("Loading Zotero collections..."):
+            st.session_state.collections = ZoteroRAG.list_collections()
+            st.session_state.collections_loaded = True
+    except sqlite3.OperationalError as e:
+        if "locked" in str(e):
+            st.error("⚠️ Zotero database is locked")
+            st.warning("""
+                **The database is currently locked by Zotero.**
+                You have two options:
+                1. **Close Zotero** (Recommended)
+                   - Close the Zotero application completely
+                   - Then refresh this page
+                2. **Keep Zotero open** (Advanced)
+                   - The app will try to read the database in read-only mode
+                   - Click the button below to retry
+                """)
+                
+            if st.button("🔄 Retry Connection"):
+                st.rerun()
+        else:
+            st.error(f"Database error: {e}")
+        st.stop()
+    except Exception as e:
+        st.error(f"Error loading Zotero: {e}")
+        st.info("Make sure Zotero is installed and the database is accessible")
 
 def main():
     st.set_page_config(
@@ -45,7 +72,7 @@ def main():
     # Output directory (first thing asked)
     st.subheader("🗂️ Output Directory")
     if 'output_dir' not in st.session_state:
-        st.session_state.output_dir = "/Users/lizzy/_research/transformers-cn/literature_output"
+        st.session_state.output_dir = "C:/Progetti Git/Tesi/output" #FIXME: default to current folder for easier setup, change as needed
     output_dir = st.text_input(
         "Base output directory (indexes, TEI cache, highlights)",
         value=st.session_state.output_dir,
@@ -62,7 +89,7 @@ def main():
         st.session_state.search_candidates = []
     if 'current_index' not in st.session_state:
         st.session_state.current_index = 0
-    if 'indexed' not in st.session_state:
+    if 'indexed' not in st.session_state: #TODO: controllare bene se sia utilizzato solo dove necessario, ora che ho il db
         st.session_state.indexed = False
     if 'collections_loaded' not in st.session_state:
         st.session_state.collections_loaded = False
@@ -79,39 +106,11 @@ def main():
     if 'source_type' not in st.session_state:
         st.session_state.source_type = 'zotero'
     if 'folder_path' not in st.session_state:
-        st.session_state.folder_path = ""
+        st.session_state.folder_path = "C:/Progetti Git/Tesi/articles/"
     
     # Load collections on first run (only if using Zotero)
     if not st.session_state.collections_loaded and st.session_state.source_type == 'zotero':
-        try:
-            with st.spinner("Loading Zotero collections..."):
-                st.session_state.collections = ZoteroRAG.list_collections()
-                st.session_state.collections_loaded = True
-        except sqlite3.OperationalError as e:
-            if "locked" in str(e):
-                st.error("⚠️ Zotero database is locked")
-                st.warning("""
-                **The database is currently locked by Zotero.**
-                
-                You have two options:
-                
-                1. **Close Zotero** (Recommended)
-                   - Close the Zotero application completely
-                   - Then refresh this page
-                
-                2. **Keep Zotero open** (Advanced)
-                   - The app will try to read the database in read-only mode
-                   - Click the button below to retry
-                """)
-                
-                if st.button("🔄 Retry Connection"):
-                    st.rerun()
-            else:
-                st.error(f"Database error: {e}")
-            st.stop()
-        except Exception as e:
-            st.error(f"Error loading Zotero: {e}")
-            st.info("Make sure Zotero is installed and the database is accessible")
+        load_zotero_collections()
     
     # Main tabs - only show after model is loaded and indexed
     if st.session_state.model_loaded and st.session_state.indexed:
@@ -125,7 +124,6 @@ def main():
     else:
         # Show setup only
         show_setup_tab()
-
 
 def show_setup_tab():
     """Setup tab for collection selection, model loading, and indexing."""
@@ -150,13 +148,7 @@ def show_setup_tab():
         st.session_state.indexed = False
         # Load collections if switching to Zotero
         if source_type == 'zotero' and not st.session_state.collections_loaded:
-            try:
-                with st.spinner("Loading Zotero collections..."):
-                    st.session_state.collections = ZoteroRAG.list_collections()
-                    st.session_state.collections_loaded = True
-            except Exception as e:
-                st.error(f"Error loading Zotero: {e}")
-                st.info("Make sure Zotero is installed and the database is accessible")
+            load_zotero_collections()
     
     # Show appropriate source selection UI
     if st.session_state.source_type == 'zotero':
@@ -195,7 +187,7 @@ def show_setup_tab():
     st.markdown("---")
     
     # GROBID Configuration
-    st.subheader("2️⃣ GROBID Service (Optional)")
+    st.subheader("1️⃣ GROBID Service (Optional)")
     st.info("🔧 GROBID is used for advanced PDF parsing with sentence-level extraction. Make sure it runs if new pdf have to be processed.")
     
     grobid_url = st.text_input(
@@ -207,7 +199,7 @@ def show_setup_tab():
     st.markdown("---")
     
     # Model Selection
-    st.subheader("3️⃣ Select Embedding Model")
+    st.subheader("2️⃣ Select Embedding Model")
     
     model_input = st.text_input(
         "HuggingFace Model URL or name",
@@ -274,7 +266,7 @@ def show_setup_tab():
                     st.session_state.model_device = None if device_choice == "auto" else device_choice
                     st.session_state.encode_batch_size = encode_batch_size
                     st.session_state.rerank_batch_size = rerank_batch_size
-                    
+
                     # Initialize RAG with appropriate source
                     if st.session_state.source_type == 'folder':
                         st.session_state.rag = ZoteroRAG(
@@ -328,77 +320,145 @@ def show_setup_tab():
     
     # Indexing Section - only show if model is loaded
     if st.session_state.model_loaded:
-        st.subheader("4️⃣ Build/Load Index")
-        
-        # # Show current status
-        #if st.session_state.indexed:
-        #     st.success(f"✅ **Index loaded:** {len(st.session_state.rag.paragraphs)} paragraphs")
-        #     st.info(f"📁 Path: {st.session_state.rag.index_path}")
-            
-        #     # Force reindex button
-        #     if st.button("🔄 Force Reindex", type="secondary", use_container_width=True):
-        #         with st.spinner("Rebuilding index..."):
-        #             pdf_progress_bar = st.progress(0)
-        #             encoding_progress_bar = st.progress(0)
-                    
-        #             def progress_callback(stage, current, total, message):
-        #                 if stage == 'pdf':
-        #                     progress = current / total if total > 0 else 0
-        #                     pdf_progress_bar.progress(progress, text=message)
-        #                 elif stage == 'encoding':
-        #                     progress = current / total if total > 0 else 0
-        #                     encoding_progress_bar.progress(progress, text=message)
-                    
-        #             try:
-        #                 st.session_state.rag.set_index_paths()
-        #                 num_chunks = st.session_state.rag.build_index(
-        #                     force_rebuild=True,
-        #                     progress_callback=progress_callback
-        #                 )
-                        
-        #                 pdf_progress_bar.empty()
-        #                 encoding_progress_bar.empty()
-                        
-        #                 st.success(f"✅ Index rebuilt with {num_chunks} chunks!")
-        #                 st.rerun()
-        #             except Exception as e:
-        #                 pdf_progress_bar.empty()
-        #                 encoding_progress_bar.empty()
-        #                 st.error(f"Error rebuilding index: {e}")
-        #else:
-        # Build new index
-        st.warning("⚠️ No index loaded. Please build an index to continue.")
-        
-        if st.button("🔨 Build Index", type="primary", use_container_width=True):
-            pdf_progress_bar = st.progress(0)
-            encoding_progress_bar = st.progress(0)
-            
-            def progress_callback(stage, current, total, message):
-                if stage == 'pdf':
-                    progress = current / total if total > 0 else 0
-                    pdf_progress_bar.progress(progress, text=message)
-                elif stage == 'encoding':
-                    progress = current / total if total > 0 else 0
-                    encoding_progress_bar.progress(progress, text=message)
-            
+        st.subheader("3️⃣ Indexed PDFs Manager")
+        col_left, col_right = st.columns([3, 1], gap="large")
+
+        with col_left:
+            st.markdown("**Indexed PDFs**")
+
             try:
-                num_chunks = st.session_state.rag.upsert_paragraphs(
-                    force_rebuild=False,
-                    progress_callback=progress_callback
+                indexed_pdfs_raw = st.session_state.rag.get_indexed_pdfs() if st.session_state.rag else []
+            except Exception:
+                indexed_pdfs_raw = []
+
+            indexed_pdfs = [x['title'] for x in indexed_pdfs_raw]
+            total_pdfs = len(indexed_pdfs)
+
+            filter_text = st.text_input(
+                "Search indexed PDFs",
+                value="",
+                placeholder="Type part of the PDF name...",
+                help="Filter list by filename. Useful when index contains many PDFs.",
+                key="indexed_pdf_filter"
+            )
+
+            col_count, col_page = st.columns([1, 1])
+            with col_count:
+                st.metric("Total indexed", total_pdfs)
+            with col_page:
+                page_size = st.selectbox(
+                    "Rows per page",
+                    options=[25, 50, 100, 200],
+                    index=0,
+                    key="indexed_pdf_page_size"
                 )
-                st.session_state.indexed = True
-                pdf_progress_bar.empty()
-                encoding_progress_bar.empty()
-                st.success(f"✅ Built index with {num_chunks} chunks!")
-                st.rerun()
-            except Exception as e:
-                pdf_progress_bar.empty()
-                encoding_progress_bar.empty()
-                st.error(f"Error building index: {e}")
-                with st.expander("Show full error"):
-                    st.exception(e)
-    else:
-        st.info("👆 Please load a model first")
+
+            if filter_text:
+                filtered_pdfs = [name for name in indexed_pdfs if filter_text.lower() in name.lower()]
+            else:
+                filtered_pdfs = indexed_pdfs
+
+            if filtered_pdfs:
+                total_filtered = len(filtered_pdfs)
+                max_page = max((total_filtered - 1) // page_size + 1, 1)
+                current_page = st.number_input(
+                    "Page",
+                    min_value=1,
+                    max_value=max_page,
+                    value=1,
+                    step=1,
+                    key="indexed_pdf_page"
+                )
+
+                start = (current_page - 1) * page_size
+                end = start + page_size
+                page_items = filtered_pdfs[start:end]
+
+                st.caption(f"Showing {start + 1}-{min(end, total_filtered)} of {total_filtered} PDFs")
+                st.dataframe(
+                    {"PDF Name": page_items},
+                    use_container_width=True,
+                    height=420,
+                    hide_index=True
+                )
+            else:
+                if total_pdfs == 0:
+                    st.info("No indexed PDFs yet. Build your index by adding PDFs from the action panel.")
+                else:
+                    st.warning("No PDF matches your search filter.")
+
+        with col_right:
+            st.markdown("**Actions**")
+
+            with st.expander("➕ Add PDFs", expanded=True):
+                st.text("Adds the PDFs inside the given source to the index.")
+                if st.button("Add PDFs", use_container_width=True, key="btn_add_single_pdf"):
+                    if st.session_state.folder_path is None and st.session_state.collections_loaded is None:
+                        st.warning("No source configured. Please select a source type and configure it in the setup section.")
+                    elif st.session_state.rag is None:
+                        st.error("Load a model first.")
+                    else:
+                        pdf_progress_bar = st.progress(0)
+                        encoding_progress_bar = st.progress(0)
+                        
+                        def progress_callback(stage, current, total, message):
+                            if stage == 'pdf':
+                                progress = current / total if total > 0 else 0
+                                pdf_progress_bar.progress(progress, text=message)
+                            elif stage == 'encoding':
+                                progress = current / total if total > 0 else 0
+                                encoding_progress_bar.progress(progress, text=message)
+                        
+                        try:
+                            num_chunks = st.session_state.rag.upsert_pdfs(
+                                progress_callback=progress_callback
+                            )
+                            st.session_state.indexed = True
+                            pdf_progress_bar.empty()
+                            encoding_progress_bar.empty()
+                            st.success(f"✅ Built index with {num_chunks} chunks!")
+                            st.rerun()
+                        except Exception as e:
+                            pdf_progress_bar.empty()
+                            encoding_progress_bar.empty()
+                            st.error(f"Error building index: {e}")
+                            with st.expander("Show full error"):
+                                st.exception(e)
+
+            #TODO: una possibile azione può essere di selezionare una collection di zotero invece della cartella
+
+            with st.expander("🗑️ Remove one PDF", expanded=False):
+                pdf_name_to_delete = st.text_input(
+                    "PDF name to delete",
+                    placeholder="example_paper.pdf",
+                    key="pdf_name_delete"
+                )
+                if st.button("Delete PDF", use_container_width=True, key="btn_delete_pdf"):
+                    if not pdf_name_to_delete.strip():
+                        st.warning("Insert the exact PDF name.")
+                    elif st.session_state.rag is None:
+                        st.error("Load a model first.")
+                    else:
+                        # Backend hook (skeleton): expected method on RAG.
+                        st.session_state.rag.delete_pdf_from_index(pdf_name_to_delete.strip())
+                        st.success(f"Delete requested for: {pdf_name_to_delete.strip()}")
+
+            with st.expander("🔥 Clear full index", expanded=False):
+                st.warning("This operation removes all indexed PDFs and vectors.")
+                confirm_clear = st.checkbox(
+                    "I understand this action is irreversible",
+                    key="confirm_clear_index"
+                )
+                if st.button("Clear all PDFs", use_container_width=True, key="btn_clear_all_pdfs"):
+                    if not confirm_clear:
+                        st.warning("Please confirm before clearing the full index.")
+                    elif st.session_state.rag is None:
+                        st.error("Load a model first.")
+                    else:
+                        # Backend hook (skeleton): expected method on RAG.
+                        st.session_state.rag.clear_pdf_index()
+                        st.session_state.indexed = False
+                        st.success("Full index clear requested.")
     
     st.markdown("---")
     
@@ -411,7 +471,6 @@ def show_setup_tab():
         st.session_state.collections = collections
         st.session_state.source_type = 'zotero'  # Default to zotero
         st.rerun()
-
 
 def _format_time(seconds: float) -> str:
     """Format time in seconds to human-readable string."""
