@@ -5,8 +5,7 @@ import logging
 from typing import List, Dict
 
 logger = logging.getLogger(__name__)
-
-
+    
 class FolderPDFSource:
     """Handles PDFs from a folder instead of Zotero database."""
     
@@ -24,6 +23,15 @@ class FolderPDFSource:
         
         self.folder_path = os.path.abspath(folder_path)
         logger.info(f"Initialized FolderPDFSource with folder: {self.folder_path}")
+
+    def _sanitize_filename(self, name: str) -> str:
+        import re
+        """Converts a string into a safe filename."""
+        if not name:
+            return "_All_Library"
+        s = name.replace(" ", "_")
+        s = re.sub(r'(?u)[^-\w.]', '', s)
+        return s
     
     def get_items(self, collection_name: str = None) -> List[Dict]:
         """Get PDF items from the folder.
@@ -43,7 +51,7 @@ class FolderPDFSource:
                     pdf_path = os.path.join(root, filename)
                     
                     # Use filename (without extension) as title
-                    title = os.path.splitext(filename)[0]
+                    title = self._sanitize_filename(os.path.splitext(filename)[0])
                     
                     # Use relative path as key (for uniqueness)
                     rel_path = os.path.relpath(pdf_path, self.folder_path)

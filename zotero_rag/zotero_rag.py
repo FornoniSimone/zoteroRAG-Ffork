@@ -200,7 +200,14 @@ class ZoteroRAG:
         Returns:
             List of dictionaries with 'pdf_path', 'title', 'item_key', and 'pdf_hash'.
         """
-        return self.qdrant_manager.list_indexed_pdfs()
+        try:
+            self.qdrant_manager.initialize_connection()
+            return self.qdrant_manager.list_indexed_pdfs()
+        except Exception as e:
+            logger.error(f"Error during get_indexed_pdfs: {str(e)}")
+            return []
+        finally:
+            self.qdrant_manager.close_connection()
 
     def upsert_pdfs(self, progress_callback=None) -> int:
         """Process PDFs, extract paragraphs, and upsert into Qdrant index.
@@ -281,6 +288,46 @@ class ZoteroRAG:
 
         return indexed
     
+    def delete_pdf_by_title(self, pdf_title: str) -> bool:
+        """Delete all paragraphs from a specific PDF in the index.
+        
+        Args:
+            pdf_title: Title (or filename/path) of the PDF to delete.
+        
+        Returns:
+            True if deletion was successful, False otherwise.
+        """
+        try:
+            pdf_path = None
+            self.qdrant_manager.initialize_connection()
+            if self.source_type == 'folder':
+                normalized_title = self._sanitize_filename(os.path.splitext(os.path.basename(pdf_title))[0]).lower()
+                for item in self.source.get_items(self.collection_name):
+                    item_title = item.get('title', '').lower()
+                    item_path = item.get('path')
+                    if item_title == normalized_title and item_path and os.path.exists(item_path):
+                        pdf_path = item_path
+                        break
+
+            #TODO: else per zotero non so come possa essere!
+
+            if not pdf_path or not os.path.exists(pdf_path):
+                logger.warning(f"Could not resolve PDF path from title: {pdf_title}")
+                return False
+
+            pdf_hash = PDFProcessor.compute_pdf_hash(pdf_path)
+            success = self.qdrant_manager.delete_pdf_from_index(pdf_hash)
+            if success:
+                logger.info(f"Successfully deleted paragraphs for PDF: {pdf_path}")
+            else:
+                logger.warning(f"No paragraphs found to delete for PDF: {pdf_path}")
+            return success
+        except Exception as e:
+            logger.error(f"Error during delete_pdf_from_index: {str(e)}")
+            return False
+        finally:
+            self.qdrant_manager.close_connection()
+
     def answer_question(self, 
                        question: str, 
                        retrieval_threshold: float = 2.0, 

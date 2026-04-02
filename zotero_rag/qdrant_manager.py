@@ -141,6 +141,37 @@ class QdrantManager:
         # Hit max size without OOM, use target fraction of max
         return max(start_size, int(last_safe_size * target_memory_fraction))
     
+    def is_pdf_indexed(self, pdf_hash: str) -> bool:
+        """Check if a pdf with the given pdf file hash is already indexed in Qdrant.
+        
+        Args:
+            file_hash: Hash of the pdf file to check.
+            
+        Returns:
+            True if the pdf is already indexed, False otherwise.
+        """
+        if not self.client:
+            raise ValueError("Qdrant client is not connected. Call initialize_connection() first.")
+        
+        flt = qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="pdf_hash",
+                    match=qmodels.MatchValue(value=pdf_hash),
+                )
+            ]
+        )
+
+        # Search for any point with a payload containing the file hash
+        points, _ = self.client.scroll(
+            collection_name=self.qdrant_collection,
+            scroll_filter=flt,
+            limit=1,
+            with_payload=False,
+            with_vectors=False
+        )
+        return len(points) > 0
+    
     #TODO: sistemare il magic number 1000
     def list_indexed_pdfs(self) -> List[Dict]:
         """List PDFs that have been indexed in Qdrant.
@@ -161,8 +192,8 @@ class QdrantManager:
         
         indexed_pdfs = [
             {
-                "title": group.hits[0].payload.get("title", "Unknown Title"),
-                "pdf_path": group.hits[0].payload.get("pdf_path", "Unknown Path"),
+                "title": group.hits[0].payload.get("title", "Unknown_Title"),
+                "pdf_path": group.hits[0].payload.get("pdf_path", "Unknown_Path"),
                 "hash": group.id,
             }
             for group in results[0].groups
@@ -293,14 +324,11 @@ class QdrantManager:
         logger.info(f"Upserted {len(points)} paragraphs into Qdrant collection: {self.qdrant_collection}")
         return len(points)
     
-    def is_pdf_indexed(self, pdf_hash: str) -> bool:
-        """Check if a pdf with the given pdf file hash is already indexed in Qdrant.
+    def delete_pdf_from_index(self, pdf_hash: str):
+        """Delete all paragraphs associated with a specific PDF hash from the Qdrant collection.
         
         Args:
-            file_hash: Hash of the pdf file to check.
-            
-        Returns:
-            True if the pdf is already indexed, False otherwise.
+            pdf_hash: Hash of the PDF whose paragraphs should be deleted.
         """
         if not self.client:
             raise ValueError("Qdrant client is not connected. Call initialize_connection() first.")
@@ -314,16 +342,13 @@ class QdrantManager:
             ]
         )
 
-        # Search for any point with a payload containing the file hash
-        points, _ = self.client.scroll(
+        bool = self.client.delete(
             collection_name=self.qdrant_collection,
-            scroll_filter=flt,
-            limit=1,
-            with_payload=False,
-            with_vectors=False
+            points_selector=qmodels.FilterSelector(filter=flt)
         )
-        return len(points) > 0
-    
+
+        return bool
+
     def search(self, query: str, threshold: float = 2.0) -> List[tuple]:
         """Search the index for relevant paragraphs.
         

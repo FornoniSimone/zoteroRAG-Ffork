@@ -429,7 +429,7 @@ def show_setup_tab():
 
             with st.expander("🗑️ Remove one PDF", expanded=False):
                 pdf_name_to_delete = st.text_input(
-                    "PDF name to delete",
+                    "PDF name to delete, must be in the given PDF source",
                     placeholder="example_paper.pdf",
                     key="pdf_name_delete"
                 )
@@ -439,9 +439,12 @@ def show_setup_tab():
                     elif st.session_state.rag is None:
                         st.error("Load a model first.")
                     else:
-                        # Backend hook (skeleton): expected method on RAG.
-                        st.session_state.rag.delete_pdf_from_index(pdf_name_to_delete.strip())
-                        st.success(f"Delete requested for: {pdf_name_to_delete.strip()}")
+                        deleted = st.session_state.rag.delete_pdf_by_title(pdf_name_to_delete.strip())
+                        if deleted:
+                            st.success(f"PDF '{pdf_name_to_delete}' deletion requested.")
+                            st.rerun()
+                        else:
+                            st.warning(f"No PDF named '{pdf_name_to_delete}' found in index.")
 
             with st.expander("🔥 Clear full index", expanded=False):
                 st.warning("This operation removes all indexed PDFs and vectors.")
