@@ -11,7 +11,7 @@ A question-answering system for your uploaded PDFs or Zotero library featuring a
 - Dense + Sparse retrieval with Qdrant hybrid search
 - Chunk contextualization via Ollama before embedding (optional)
 - Question expansion via automatic paraphrasing for improved recall
-- Question type presets (factoid, methodology, explanation, comparison)
+- Three adaptive rerank threshold presets plus manual custom thresholds
 - Sliding window QA for answers spanning paragraph boundaries
 - Multi-color highlighting for multiple queries
 - Streamlit web interface with real-time progress tracking
@@ -48,7 +48,7 @@ A question-answering system for your uploaded PDFs or Zotero library featuring a
 │   ├── example_config.yaml         # Full YAML config with documentation
 │   ├── advanced_config.yaml        # Advanced YAML config with custom paraphrases
 │   ├── folder_example_config.yaml  # Example config for PDF upload workflows
-│   ├── question_type_presets.yaml  # Question type preset documentation
+│   ├── threshold_presets.yaml      # Threshold preset reference
 │   └── highlighter_colors.html     # Color reference for highlighting
 │
 ├── pyproject.toml           # Poetry dependencies
@@ -162,38 +162,30 @@ Then navigate to `http://localhost:8501`
    - Natural language queries supported
    - Example: "What methods are used for circuit interpretability?"
 
-2. **Question Type Selection** (Optional)
-   - **Factoid**: Short, precise answers (e.g., "Who invented transformers?")
-   - **Methodology**: Detailed process explanations (e.g., "How does attention mechanism work?")
-   - **Explanation**: Conceptual understanding (e.g., "Why are transformers effective?")
-   - **Comparison**: Contrasting approaches (e.g., "What's the difference between BERT and GPT?")
-   - **General**: Balanced settings for mixed queries
-
-3. **Adjust Parameters** (Advanced)
-   - **Retrieval threshold**: Retrieval score ( (-1, 1), highier = stricter )
-   - **Rerank threshold**: CrossEncoder score ( (0, 1), higher = stricter )
-   - **QA threshold**: Answer confidence ( (0, 1), higher = more confident )
-   - **Min words**: Minimum answer length filter
-   - **Answer length**: Max characters per answer
-   - **Question Paraphrases**: Number of question variations automatically created
+2. **Choose a Threshold Preset**
+    - **Low**: Retrieve 0.35; rerank at mean - 2 * std to retain more candidates.
+    - **Medium**: Retrieve 0.45; rerank at mean - std for general use.
+    - **High**: Retrieve 0.45; rerank at mean + 2 * std for stricter relevance.
+    - **Custom**: Manually set Retrieve, Rerank, and QA thresholds.
+    - QA threshold is 0.10 for the three presets.
 
 
-4. **Question Expansion** (Optional)
+3. **Question Expansion** (Optional)
    - Generate paraphrases to improve retrieval
-   - Select/edit which variations to use
+    - Select/edit which generated variations to use; the original question is always included
    - Automatically merges results from all variations
 
-5. **Search & Navigate**
+4. **Search & Navigate**
    - View answers with context and scores
    - Navigate results with Previous/Next buttons
    - See PDF source, page number, and section
    - Click "Open PDF" to view in default viewer
 
-6. **Highlight Color**
+5. **Highlight Color**
    - Choose from presets (Yellow, Cyan, Orange, Green, Pink, Purple)
    - Or use custom RGB color picker
 
-7. **Highlight PDF**
+6. **Highlight PDF**
    - Select only the answers you like to highlight
    - Click "Highlight PDF" to add colored annotations
 
@@ -258,15 +250,9 @@ export TQDM_DISABLE=1
 export TOKENIZERS_PARALLELISM=false
 ```
 
-### Question Type Presets
+### Threshold Presets
 
-Each question type has optimized parameters:
-
-- **Factoid**: Stricter QA threshold, shorter answers, entity preference
-- **Methodology**: Very lenient threshold, longer answers, section diversity
-- **Explanation**: Lenient threshold, medium-length answers
-- **Comparison**: Moderate threshold, diverse sources preferred
-- **General**: Balanced settings for mixed queries
+The threshold reference is in `example_configs/threshold_presets.yaml`. Presets calculate the rerank cutoff from the current score distribution; selecting **Custom** uses the supplied rerank value directly.
 
 ## Citation
 

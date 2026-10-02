@@ -36,11 +36,13 @@ def load_config(config_path: str) -> Dict[str, Any]:
     # Set defaults
     config.setdefault('defaults', {})
     config['defaults'].setdefault('num_paraphrases', 2)
-    config['defaults'].setdefault('retrieval_threshold', 0.7)
-    config['defaults'].setdefault('rerank_threshold', 0.25)
+    config['defaults'].setdefault('retrieval_threshold', 0.45)
+    config['defaults'].setdefault('qa_score_threshold', 0.10)
+    if 'rerank_mode' not in config['defaults']:
+        config['defaults']['rerank_mode'] = (
+            'custom' if 'rerank_threshold' in config['defaults'] else 'medium'
+        )
     config['defaults'].setdefault('highlight_color', [1, 1, 0])
-    config['defaults'].setdefault('question_type', 'general')
-    config['defaults'].setdefault('custom_config', None)
     
     config.setdefault('output_base_dir', './output')
     config.setdefault('model_name', 'BAAI/bge-base-en-v1.5')
@@ -165,16 +167,19 @@ def run_from_config(config_path: str) -> Dict[str, List[Answer]]:
         # Get question-specific settings or use defaults
         num_paraphrases = question_config.get('num_paraphrases', defaults['num_paraphrases'])
         retrieval_threshold = question_config.get('retrieval_threshold', defaults['retrieval_threshold'])
-        rerank_threshold = question_config.get('rerank_threshold', defaults['rerank_threshold'])
+        qa_score_threshold = question_config.get('qa_score_threshold', defaults['qa_score_threshold'])
         highlight_color = question_config.get('highlight_color', defaults['highlight_color'])
-        question_type = question_config.get('question_type', defaults.get('question_type', 'general'))
-        
+
+        rerank_mode = question_config.get('rerank_mode')
+        if rerank_mode is None:
+            rerank_mode = 'custom' if 'rerank_threshold' in question_config else defaults['rerank_mode']
+        rerank_threshold = question_config.get('rerank_threshold', defaults.get('rerank_threshold'))
+        if rerank_mode == 'custom' and rerank_threshold is None:
+            rerank_threshold = 0.45
+
         # Convert highlight_color to tuple
         if highlight_color:
             highlight_color = tuple(highlight_color)
-        
-        # Get custom_config if provided
-        custom_config = question_config.get('custom_config', defaults.get('custom_config'))
         
         # Get pre-defined paraphrases if provided
         paraphrases = question_config.get('paraphrases')
@@ -187,12 +192,12 @@ def run_from_config(config_path: str) -> Dict[str, List[Answer]]:
         answers = rag.answer_question(
             question=question,
             retrieval_threshold=retrieval_threshold,
+            qa_score_threshold=qa_score_threshold,
             rerank_threshold=rerank_threshold,
+            rerank_mode=rerank_mode,
             num_paraphrases=num_paraphrases,
             highlight_color=highlight_color,
-            question_variations=question_variations,
-            question_type=question_type,
-            custom_config=custom_config
+            question_variations=question_variations
         )
         
         all_results[question] = answers

@@ -650,88 +650,7 @@ def show_search_tab():
     
     st.header("🔍 Search Your Library")
     
-    # Question type presets
-    QUESTION_TYPE_PRESETS = {
-        'factoid': {
-            'emoji': '📌',
-            'description': 'Specific facts or entities',
-            'qa_score_threshold': 0.10,
-            'retrieval_threshold': 0.45,
-            'rerank_threshold': 0.45,
-            'max_answer_length': 50,
-            'min_answer_words': 2,
-            'prefer_entities': True
-        },
-        'explanation': {
-            'emoji': '💭',
-            'description': 'How/why something works',
-            'qa_score_threshold': 0.05,
-            'retrieval_threshold': 0.35,
-            'rerank_threshold': 0.40,
-            'max_answer_length': 200,
-            'min_answer_words': 3,
-            'prefer_entities': False
-        },
-        'methodology': {
-            'emoji': '⚙️',
-            'description': 'Processes, methods, algorithms',
-            'qa_score_threshold': 0.05,
-            'retrieval_threshold': 0.35,
-            'rerank_threshold': 0.40,
-            'max_answer_length': 250,
-            'min_answer_words': 5,
-            'prefer_entities': False,
-            'section_diversity': True,
-            'priority_sections': ['abstract', 'introduction', 'methodology', 'methods', 
-                                 'approach', 'algorithm', 'implementation']
-        },
-        'comparison': {
-            'emoji': '⚖️',
-            'description': 'Contrasting different concepts',
-            'qa_score_threshold': 0.08,
-            'retrieval_threshold': 0.45,
-            'rerank_threshold': 0.45,
-            'max_answer_length': 150,
-            'min_answer_words': 3,
-            'prefer_diversity': True
-        },
-        'definition': {
-            'emoji': '📖',
-            'description': 'What something is',
-            'qa_score_threshold': 0.10,
-            'retrieval_threshold': 0.45,
-            'rerank_threshold': 0.45,
-            'max_answer_length': 100,
-            'min_answer_words': 3,
-            'prefer_entities': False
-        },
-        'general': {
-            'emoji': '❓',
-            'description': 'General questions',
-            'qa_score_threshold': 0.10,
-            'retrieval_threshold': 0.45,
-            'rerank_threshold': 0.45,
-            'max_answer_length': 150,
-            'min_answer_words': 3,
-            'prefer_entities': False
-        },
-        'custom': {
-            'emoji': '🎛️',
-            'description': 'Custom settings (fully configurable)',
-            'qa_score_threshold': 0.0,
-            'retrieval_threshold': 0.45,
-            'rerank_threshold': 0.45,
-            'max_answer_length': 150,
-            'min_answer_words': 3,
-            'prefer_entities': False
-        }
-    }
-    
-    # Initialize session state for presets if not exists
-    if 'selected_question_type' not in st.session_state:
-        st.session_state.selected_question_type = 'general'
-    
-    # Query input (moved to top)
+    # Query input
     query = st.text_input(
         "Enter your question",
         placeholder="What are the main findings about...",
@@ -740,104 +659,68 @@ def show_search_tab():
     
     st.markdown("---")
 
-    col_question_type, col_adjust = st.columns([1, 2], gap="large")
+    THRESHOLD_PRESETS = {
+        'low': {
+            'description': 'For exchaustive search, may return more results with lower relevance.',
+            'retrieval_threshold': 0.35,
+            'qa_score_threshold': 0.10,
+        },
+        'medium': {
+            'description': 'Balanced search for relevance and coverage. Recommended for general use.',
+            'retrieval_threshold': 0.45,
+            'qa_score_threshold': 0.10,
+        },
+        'high': {
+            'description': 'For highly relevant results, may return fewer results but with higher confidence.',
+            'retrieval_threshold': 0.45,
+            'qa_score_threshold': 0.10,
+        },
+        'custom': {
+            'description': 'Set your own thresholds for retrieval, reranking, and QA scoring.',
+        },
+    }
+    if 'selected_threshold_preset' not in st.session_state:
+        st.session_state.selected_threshold_preset = 'medium'
 
-    with col_question_type:
-        # Question type selector
-        st.subheader("Question Type")
+    st.subheader("⚖️ Threshold Configuration")
+    threshold_columns = st.columns(4)
+    for column, (preset_name, preset) in zip(threshold_columns, THRESHOLD_PRESETS.items()):
+        with column:
+            st.caption(preset['description'])
+            if st.button(
+                preset_name.title(),
+                type="primary" if st.session_state.selected_threshold_preset == preset_name else "secondary",
+                width="stretch",
+                key=f"threshold_preset_{preset_name}",
+            ):
+                st.session_state.selected_threshold_preset = preset_name
+                st.rerun()
 
-        question_type_options = list(QUESTION_TYPE_PRESETS.keys())
-        question_type_labels = [
-            f"{QUESTION_TYPE_PRESETS[qt]['emoji']} {qt.title()} - {QUESTION_TYPE_PRESETS[qt]['description']}"
-            for qt in question_type_options
-        ]
-
-        selected_idx = question_type_options.index(st.session_state.selected_question_type)
-        selected_label = st.selectbox(
-            "Select question type to apply preset parameters",
-            question_type_labels,
-            index=selected_idx,
-            key="question_type_selector"
-        )
-
-        # Extract question type from label
-        selected_question_type = question_type_options[question_type_labels.index(selected_label)]
-        st.session_state.selected_question_type = selected_question_type
-
-    preset = QUESTION_TYPE_PRESETS[selected_question_type]
-
-    with col_adjust:
-        # Always show configurable parameters (pre-filled with preset values)
-        st.subheader("Adjust Parameters (optional)")
+    selected_threshold_preset = st.session_state.selected_threshold_preset
+    rerank_mode = selected_threshold_preset
+    paraphrases_to_generate = 2
+    if selected_threshold_preset == 'custom':
         col_retrieval, col_rerank, col_qa = st.columns(3)
-
         with col_retrieval:
             retrieval_threshold = st.number_input(
-                "1. Retrieval Threshold",
-                min_value=0.0, max_value=1.0,
-                value=preset['retrieval_threshold'],
-                step=0.05,
-                help="Stage 1 (Cosine Similarity): Lower = more paragraphs retrieved (-1.0, 1.0)."
+                "Soglia Retrieve", min_value=0.0, max_value=1.0,
+                value=0.45, step=0.01, key="custom_retrieval_threshold"
             )
-
         with col_rerank:
             rerank_threshold = st.number_input(
-                "2. Rerank Threshold",
-                min_value=0.0, max_value=1.0,
-                value=preset['rerank_threshold'],
-                step=0.05,
-                help="Stage 2 (CrossEncoder): Minimum semantic similarity score (0.0, 1.0)."
+                "Soglia Rerank", min_value=0.0, max_value=1.0,
+                value=0.45, step=0.01, key="custom_rerank_threshold"
             )
-
         with col_qa:
             qa_score_threshold = st.number_input(
-                "3. QA Confidence",
-                min_value=0.0, max_value=1.0,
-                value=preset['qa_score_threshold'],
-                step=0.05,
-                help="Stage 3 (QA Model): Confidence threshold."
+                "Soglia QA", min_value=0.0, max_value=1.0,
+                value=0.10, step=0.01, key="custom_qa_score_threshold"
             )
-
-        col_min_words, col_max_length, col_paraphrases = st.columns(3)
-        with col_min_words:
-            min_answer_words = st.number_input(
-                "Min Answer Words",
-                min_value=1, max_value=20,
-                value=preset['min_answer_words'],
-                step=1,
-                help="Minimum words in an answer."
-            )
-
-        with col_max_length:
-            max_answer_length = st.number_input(
-                "Max Answer Length",
-                min_value=10, max_value=500,
-                value=preset['max_answer_length'],
-                step=10,
-                help="Maximum words in an answer."
-            )
-
-        with col_paraphrases:
-            num_paraphrases = st.number_input(
-                "Question Paraphrases",
-                min_value=0, max_value=10,
-                value=2,
-                step=1,
-                help="Number of question paraphrases to generate (0 = disabled, uses only original question)."
-            )
-    
-    # Build custom config if user modified any values from preset
-    if (qa_score_threshold != preset['qa_score_threshold'] or
-        max_answer_length != preset['max_answer_length'] or
-        min_answer_words != preset['min_answer_words']):
-        custom_config = {
-            'qa_score_threshold': qa_score_threshold,
-            'max_answer_length': max_answer_length,
-            'min_answer_words': min_answer_words,
-            'prefer_entities': False
-        }
     else:
-        custom_config = None
+        preset = THRESHOLD_PRESETS[selected_threshold_preset]
+        retrieval_threshold = preset['retrieval_threshold']
+        rerank_threshold = None
+        qa_score_threshold = preset['qa_score_threshold']
     
     # Predefined color presets (defined here for use in search)
     COLOR_PRESETS = {
@@ -865,7 +748,7 @@ def show_search_tab():
     st.markdown("---")
     
     # Paraphrase management UI
-    if num_paraphrases > 0 and query:
+    if query:
         st.subheader("📝 Question Paraphrases")
         
         # Initialize session state for paraphrases
@@ -885,25 +768,27 @@ def show_search_tab():
                     with st.spinner("Generating paraphrases..."):
                         variations = st.session_state.rag.qa_engine.expand_question(
                             query, 
-                            num_variations=num_paraphrases * 2  # Generate more for selection
+                            num_variations=paraphrases_to_generate * 2  # Generate more for selection
                         )
                         # Store candidates (excluding original)
                         st.session_state.paraphrase_candidates = variations[1:]
                         st.session_state.paraphrase_query = query
                         # Auto-select first N paraphrases
-                        st.session_state.paraphrase_selected = set(range(min(num_paraphrases, len(variations) - 1)))
+                        st.session_state.paraphrase_selected = set(range(min(paraphrases_to_generate, len(variations) - 1)))
                         st.rerun()
                 else:
                     st.error("Paraphraser not available. Question expansion is disabled.")
-        
+
         with col_more:
-            if st.session_state.paraphrase_candidates and st.button("➕ Generate More", width="stretch"):
+            if (st.session_state.paraphrase_candidates and
+                st.session_state.paraphrase_query == query and
+                st.button("➕ Generate More", width="stretch")):
                 if st.session_state.rag and st.session_state.rag.qa_engine.paraphraser:
                     with st.spinner("Generating more paraphrases..."):
                         # Generate additional paraphrases
                         more_variations = st.session_state.rag.qa_engine.expand_question(
                             query, 
-                            num_variations=num_paraphrases
+                            num_variations=paraphrases_to_generate
                         )
                         # Add new ones to existing (avoid duplicates)
                         existing_set = set(st.session_state.paraphrase_candidates)
@@ -1039,27 +924,23 @@ def show_search_tab():
         
         try:
             # Prepare selected paraphrases (if any)
-            selected_paraphrases = None
-            if (num_paraphrases > 0 and 
-                st.session_state.get('paraphrase_candidates') and 
+            selected_paraphrases = [query]
+            if (st.session_state.get('paraphrase_candidates') and
                 st.session_state.get('paraphrase_query') == query):
-                # Get selected paraphrases
-                selected_paraphrases = [query]  # Always include original
                 for i in sorted(st.session_state.paraphrase_selected):
                     if i < len(st.session_state.paraphrase_candidates):
                         selected_paraphrases.append(st.session_state.paraphrase_candidates[i])
             
-            # Pass the selected question type, custom config, color, and paraphrases
+            # Pass the selected thresholds, color, and paraphrases
             st.session_state.search_results = st.session_state.rag.answer_question(
                 question=query,
                 retrieval_threshold=retrieval_threshold,
                 qa_score_threshold=qa_score_threshold,
                 rerank_threshold=rerank_threshold,
+                rerank_mode=rerank_mode,
                 progress_callback=qa_callback,
                 rerank_callback=rerank_callback,
-                question_type=selected_question_type,
-                custom_config=custom_config,
-                num_paraphrases=num_paraphrases,
+                num_paraphrases=0,
                 question_variations=selected_paraphrases
             )
 
@@ -1078,8 +959,6 @@ def show_search_tab():
             st.session_state.current_index = 0
             st.session_state.current_query = query
             
-            # Store question type for display
-            st.session_state.current_question_type = selected_question_type
             st.session_state.qa_score_threshold = qa_score_threshold  # Store threshold
         except Exception as e:
             st.error(f"❌ Search failed: {e}")
@@ -1103,15 +982,6 @@ def show_search_tab():
                 i: True for i in range(len(st.session_state.search_results))
             }
 
-        # Get question type info
-        question_type = st.session_state.get('current_question_type', 'general')
-        preset = QUESTION_TYPE_PRESETS.get(question_type, QUESTION_TYPE_PRESETS['general'])
-        question_type_emoji = preset['emoji']
-        
-        # Get the configuration for this question type
-        qa_threshold_used = st.session_state.get('qa_score_threshold', 0.0)
-        config = st.session_state.rag.qa_engine.get_config_for_type(question_type, qa_threshold_used)
-        
         st.success(f"✅ Found {len(st.session_state.search_results)} answers for: *{st.session_state.current_query}*")
         
         # Navigation and actions
@@ -1296,15 +1166,13 @@ def show_search_tab():
         st.warning("⚠️ No results found")
         st.info("""
         **Possible reasons:**
-        - QA score threshold too high (try 0.0)
-        - Retrieval threshold too low (try increasing to 3.0-5.0)
-        - No semantically similar paragraphs found
-        - Question format doesn't match extractive QA style
-        
-        **Try:**
-        - Lower the QA Score Threshold to 0.0
-        - Increase Retrieval Threshold to 3.0 or higher
-        - Rephrase as a specific question (e.g., "What is X?" instead of "Tell me about X")
+        - The question is too specific or not covered in the indexed PDFs.
+        - The retrieval or rerank thresholds are too strict. Try lowering them.
+        - The PDFs may not contain the relevant information. Consider adding more PDFs to your library.
+
+        **Tips:**
+        - Try rephrasing your question or using more general terms.
+        - Try another threshold preset or adjust the values in Custom.
         """)
     elif not query and search_clicked:
         st.info("👆 Enter a question above and click Search to get started")

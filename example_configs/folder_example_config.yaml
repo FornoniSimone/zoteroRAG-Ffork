@@ -30,22 +30,19 @@ create_highlighted_pdfs: true
 # Default settings for all questions (can be overridden per question)
 defaults:
   num_paraphrases: 2
-  retrieval_threshold: 2.0
-  rerank_threshold: 0.25
+  retrieval_threshold: 0.45
+  qa_score_threshold: 0.10
+  rerank_mode: medium
   highlight_color: [1, 1, 0]  # RGB color (yellow)
-  question_type: general
 
 # Questions to answer
 questions:
   - question: "What is the main contribution of this work?"
     num_paraphrases: 2
-    question_type: general
     highlight_color: [1, 1, 0]  # yellow
   
   - question: "What methodology was used?"
-    question_type: methodology
     highlight_color: [0, 1, 1]  # cyan
   
   - question: "What are the key results?"
-    question_type: factoid
     highlight_color: [1, 0.5, 0]  # orange

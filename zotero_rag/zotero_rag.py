@@ -571,12 +571,11 @@ class ZoteroRAG:
     def answer_question(self, 
                     question: str, 
                     retrieval_threshold: float = 0.45, 
-                    qa_score_threshold: float = 0.0, 
-                    rerank_threshold: float = 0.45, 
+                    qa_score_threshold: float = 0.10,
+                    rerank_threshold: Optional[float] = None,
+                    rerank_mode: str = 'medium',
                     progress_callback=None, 
                     rerank_callback=None,
-                    question_type: str = 'general',
-                    custom_config: dict = None,
                     num_paraphrases: int = 2,
                     highlight_color: Tuple[float, float, float] = None,
                     question_variations: List[str] = None) -> List[Answer]:
@@ -591,11 +590,10 @@ class ZoteroRAG:
             question: The question to answer.
             retrieval_threshold: Minimum cosine similarity score to keep retrieved paragraphs.
             qa_score_threshold: Minimum QA confidence score to keep answers.
-            rerank_threshold: Minimum rerank probability to keep candidates.
+            rerank_threshold: Exact custom rerank probability threshold; unused by adaptive modes.
+            rerank_mode: Adaptive rerank mode ('low', 'medium', 'high') or 'custom'.
             progress_callback: Function(current, total, message) for QA progress.
             rerank_callback: Function(current, total, message) for rerank progress.
-            question_type: Type of question (factoid, explanation, methodology, etc.).
-            custom_config: Custom configuration dict to override preset config.
             num_paraphrases: Number of question paraphrases to generate (0 = disabled).
             highlight_color: RGB tuple (0-1) for highlighting. If None, use query-based color.
             question_variations: Pre-generated question variations to use. If None, generate them.
@@ -669,6 +667,7 @@ class ZoteroRAG:
             question, 
             candidates, 
             rerank_threshold,
+            threshold_mode=rerank_mode,
             progress_callback=rerank_callback,
             query_variations=question_variations
         )
@@ -694,9 +693,7 @@ class ZoteroRAG:
             qa_score_threshold=qa_score_threshold,
             color=color,
             progress_callback=progress_callback,
-            question_variations=question_variations,
-            question_type=question_type,
-            custom_config=custom_config
+            question_variations=question_variations
         )
         
         return self._attach_pdf_paths(answers)

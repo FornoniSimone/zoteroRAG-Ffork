@@ -96,66 +96,6 @@ class QAEngine:
             logger.warning(f"Could not load paraphraser: {e}")
             self.paraphraser = None
     
-    def get_config_for_type(self, question_type: str, base_threshold: float) -> dict:
-        """Return configuration for a specific question type.
-        
-        Args:
-            question_type: The question type ('factoid', 'methodology', 'explanation', etc.).
-            base_threshold: The base QA score threshold to use/adjust from.
-            
-        Returns:
-            Dictionary with parameters for this question type.
-        """
-        configs = {
-            'factoid': {
-                'qa_score_threshold': max(0.1, base_threshold),  # More lenient
-                'max_answer_length': 50,     # Shorter answers
-                'min_answer_words': 2,       # Allow shorter answers
-                'prefer_entities': True
-            },
-            'methodology': {
-                'qa_score_threshold': max(0.05, base_threshold * 0.5),  # Very lenient
-                'max_answer_length': 250,    # Longer answers for detailed explanations
-                'min_answer_words': 5,       # Ensure substantial answers
-                'prefer_entities': False,
-                'section_diversity': True,   # Want both high-level and detailed answers
-                'priority_sections': ['abstract', 'introduction', 'methodology', 'methods', 
-                                     'approach', 'algorithm', 'implementation']
-            },
-            'explanation': {
-                'qa_score_threshold': max(0.05, base_threshold * 0.5),  # Very lenient
-                'max_answer_length': 200,    # Longer answers allowed
-                'min_answer_words': 3,       # Normal minimum
-                'prefer_entities': False
-            },
-            'comparison': {
-                'qa_score_threshold': max(0.08, base_threshold * 0.8),
-                'max_answer_length': 150,
-                'min_answer_words': 3,
-                'prefer_diversity': True     # Want different perspectives
-            },
-            'definition': {
-                'qa_score_threshold': max(0.1, base_threshold),
-                'max_answer_length': 100,
-                'min_answer_words': 3,
-                'prefer_entities': False
-            },
-            'general': {
-                'qa_score_threshold': base_threshold,
-                'max_answer_length': 150,
-                'min_answer_words': 3,
-                'prefer_entities': False
-            },
-            'custom': {
-                # Custom will be overridden by provided config
-                'qa_score_threshold': base_threshold,
-                'max_answer_length': 150,
-                'min_answer_words': 3,
-                'prefer_entities': False
-            }
-        }
-        return configs.get(question_type, configs['general'])
-    
     def expand_question(self, question: str, num_variations: int = 2) -> List[str]:
         """Generate question variations to improve retrieval coverage.
         
@@ -320,9 +260,7 @@ class QAEngine:
                     qa_score_threshold: float = 0.0,
                     color: Tuple[float, float, float] = (1, 1, 0),
                     progress_callback=None,
-                    question_variations: List[str] = None,
-                    question_type: str = 'general',
-                    custom_config: dict = None) -> List[Answer]:
+                    question_variations: List[str] = None) -> List[Answer]:
         """Extract answers for a given question from candidate paragraphs.
         
         Args:
@@ -332,8 +270,6 @@ class QAEngine:
             color: Highlight color for the answer (R, G, B).
             progress_callback: Optional callback for progress updates (batch_idx, total_batches, message).
             question_variations: Optional list of question variations to use instead of generating them.
-            question_type: Type of question (e.g., 'factoid', 'methodology', 'explanation', etc.) to adjust extraction strategy.
-            custom_config: Optional dictionary to override default config parameters for the question type.
             
         Returns:
             List of Answer objects extracted from the candidates.
@@ -347,17 +283,20 @@ class QAEngine:
         
         # --- 0. INITIALIZE STATS & CONFIG ---
         questions_to_use = question_variations if question_variations else [question]
-        config = self.get_config_for_type(question_type, qa_score_threshold)
-        if custom_config:
-            config.update(custom_config)
+        config = {
+            'qa_score_threshold': qa_score_threshold,
+            'max_answer_length': 150,
+            'min_answer_words': 3,
+        }
         
-        logger.info(f"QA Configuration -> Type: {question_type} | Threshold: {config['qa_score_threshold']:.3f} | Min Words: {config['min_answer_words']}")
+        logger.info(f"QA Configuration -> Threshold: {config['qa_score_threshold']:.3f} | Min Words: {config['min_answer_words']} | Max Words: {config['max_answer_length']}")
         
         # Initialize tracking dictionaries
         filter_stats = {
             'total_inputs': 0,      # Total (candidates * variations)
             'successful_raw': 0,    # Raw answers extracted from model
             'too_few_words': 0,     # Filtered: Answer too short
+            'too_many_words': 0,    # Filtered: Answer too long
             'below_threshold': 0,   # Filtered: Confidence too low
             'duplicates': 0,        # Filtered: Duplicate content
             'final_count': 0        # Final answers returned
@@ -488,6 +427,11 @@ class QAEngine:
             expanded = self._expand_to_sentences(
                 target_paragraph, local_start, local_end
             )
+
+            # if len(expanded.text.split()) > config['max_answer_length']:
+            #     filter_stats['too_many_words'] += 1
+            #     logger.debug("Rejected (Too Long): %s...", expanded.text[:30])
+            #     continue
             
             answers.append(Answer(
                 text=expanded.text,
@@ -519,65 +463,27 @@ class QAEngine:
                 return False
             return True
 
-        if config.get('section_diversity', False):
-            # ... [Section Diversity Logic] ...
-            intro_sections = ['abstract', 'introduction', 'intro']
-            method_sections = ['methodology', 'methods', 'approach', 'algorithm', 'implementation']
-            
-            intro_answers, method_answers, other_answers = [], [], []
-            
-            for ans in answers:
-                if not is_valid_score(ans): continue
-                    
-                sec = (ans.section or '').lower()
-                if any(s in sec for s in intro_sections): intro_answers.append(ans)
-                elif any(s in sec for s in method_sections): method_answers.append(ans)
-                else: other_answers.append(ans)
-            
-            def dedup_list(alist):
-                seen, uniq = set(), []
-                for a in alist:
-                    sig = (a.title, " ".join(a.text.lower().split()))
-                    if sig not in seen:
-                        seen.add(sig)
-                        uniq.append(a)
-                    else:
-                        filter_stats['duplicates'] += 1
-                return uniq
+        seen_answers = set()
+        for ans in answers:
+            if not is_valid_score(ans): continue
 
-            intro_u = dedup_list(intro_answers)
-            method_u = dedup_list(method_answers)
-            other_u = dedup_list(other_answers)
-            
-            # Interleave
-            max_len = max(len(intro_u), len(method_u))
-            for i in range(max_len):
-                if i < len(intro_u): unique_answers.append(intro_u[i])
-                if i < len(method_u): unique_answers.append(method_u[i])
-            unique_answers.extend(other_u)
-            
-        else:
-            # Standard Deduplication
-            seen_answers = set()
-            for ans in answers:
-                if not is_valid_score(ans): continue
-                
-                sig = (ans.title, " ".join(ans.text.lower().split()))
-                if sig not in seen_answers:
-                    seen_answers.add(sig)
-                    unique_answers.append(ans)
-                else:
-                    filter_stats['duplicates'] += 1
+            sig = (ans.title, " ".join(ans.text.lower().split()))
+            if sig not in seen_answers:
+                seen_answers.add(sig)
+                unique_answers.append(ans)
+            else:
+                filter_stats['duplicates'] += 1
 
         filter_stats['final_count'] = len(unique_answers)
 
         # --- 5. FINAL SUMMARY LOG ---
         logger.info("-" * 60)
-        logger.info(f"QA EXTRACTION SUMMARY ({question_type})")
+        logger.info("QA EXTRACTION SUMMARY")
         logger.info(f"Input: {len(candidates)} candidates -> {filter_stats['total_inputs']} sequences (expanded)")
         logger.info(f"Raw Outputs: {filter_stats['successful_raw']} spans found")
         logger.info(f"Filtering:")
         logger.info(f"  - Too Short (<{config['min_answer_words']} words): {filter_stats['too_few_words']}")
+        logger.info(f"  - Too Long (>{config['max_answer_length']} words): {filter_stats['too_many_words']}")
         logger.info(f"  - Low Confidence (<{config['qa_score_threshold']:.2f}): {filter_stats['below_threshold']}")
         logger.info(f"  - Duplicates: {filter_stats['duplicates']}")
         logger.info(f"Final Results: {filter_stats['final_count']} unique answers")

@@ -1,0 +1,22 @@
+# Threshold preset reference for run_from_config.py
+
+presets:
+  bassa:
+    retrieval_threshold: 0.35
+    rerank_mode: low
+    qa_score_threshold: 0.10
+  media:
+    retrieval_threshold: 0.45
+    rerank_mode: medium
+    qa_score_threshold: 0.10
+  alta:
+    retrieval_threshold: 0.45
+    rerank_mode: high
+    qa_score_threshold: 0.10
+
+# In custom mode, rerank_threshold is applied directly without adaptation.
+custom:
+  retrieval_threshold: 0.45
+  rerank_mode: custom
+  rerank_threshold: 0.45
+  qa_score_threshold: 0.10

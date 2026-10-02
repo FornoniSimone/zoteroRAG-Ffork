@@ -1,9 +1,9 @@
 """Cross-encoder reranking model."""
 
 import logging
-from typing import List, Tuple
-import numpy as np
 import torch
+from typing import List, Optional, Tuple
+import numpy as np
 from sentence_transformers import CrossEncoder
 
 from models import Paragraph, RerankedParagraph
@@ -15,61 +15,56 @@ class Reranker:
     """Handles reranking of retrieved candidates using a cross-encoder model."""
     
     def __init__(self, 
-                model_name: str = 'BAAI/bge-reranker-base', 
-                device: str = None,
-                batch_size: int = None):
+                 model_name: str = 'BAAI/bge-reranker-base',
+                 device: str = None,
+                 batch_size: int = None):
         """Initialize the reranker.
-        
+
         Args:
             model_name: Name of the cross-encoder model.
             device: Device to use ('cpu', 'cuda', 'mps'). Auto-detect if None.
             batch_size: Batch size for reranking. If None, auto-detect safe size.
         """
-        import torch
         self.model_name = model_name
         self.device = device or ("mps" if torch.backends.mps.is_available() else "cpu")
         self.batch_size = batch_size  # None means auto-detect
         self.model = CrossEncoder(model_name, device=self.device)
         logger.info(f"Reranker initialized with model {model_name} on {self.device}")
-    
-    def adaptive_rerank_threshold(self, rerank_scores: np.ndarray, base_threshold: float = 0.25) -> float:
+
+    def adaptive_rerank_threshold(self,
+                                  rerank_scores: np.ndarray,
+                                  base_threshold: Optional[float] = None,
+                                  mode: str = 'medium') -> float:
         """Adjust rerank threshold based on score distribution.
         
         Args:
             rerank_scores: Array of rerank probability scores (0-1).
-            base_threshold: The baseline threshold to adjust from.
+            base_threshold: Required threshold for custom mode; unused otherwise.
+            mode: Adaptive mode ('low', 'medium', 'high') or 'custom'.
             
         Returns:
             Adjusted threshold value.
         """
-        if len(rerank_scores) < 3:
+        if mode == 'custom':
+            if base_threshold is None:
+                raise ValueError("A rerank threshold is required in custom mode")
             return base_threshold
-        
+
+        std_multipliers = {'low': -2, 'medium': -1, 'high': 2}
+        if mode not in std_multipliers:
+            raise ValueError(f"Unsupported rerank threshold mode: {mode}")
+
         # Calculate statistics
         mean_score = np.mean(rerank_scores)
         std_score = np.std(rerank_scores)
         max_score = np.max(rerank_scores)
-        
-        # If there's a clear winner (high max, low mean), be more selective
-        if max_score > 0.7 and mean_score < 0.4:
-            adjusted = max(base_threshold, mean_score + 0.5 * std_score)
-            logger.info(f"Adaptive threshold: Clear winner detected (max={max_score:.3f}, mean={mean_score:.3f}) -> {adjusted:.3f}")
-            return adjusted
-        
-        # If scores are uniformly low, be more lenient
-        if max_score < 0.4:
-            adjusted = min(base_threshold, base_threshold * 0.7)
-            logger.info(f"Adaptive threshold: Uniformly low scores (max={max_score:.3f}) -> {adjusted:.3f}")
-            return adjusted
-        
-        # If scores are uniformly high, be more selective
-        if mean_score > 0.6:
-            adjusted = max(base_threshold, mean_score - 0.5 * std_score)
-            logger.info(f"Adaptive threshold: Uniformly high scores (mean={mean_score:.3f}) -> {adjusted:.3f}")
-            return adjusted
-        
-        logger.debug(f"Adaptive threshold: Using base threshold {base_threshold:.3f} (mean={mean_score:.3f}, max={max_score:.3f})")
-        return base_threshold
+
+        adjusted_threshold = mean_score + std_multipliers[mode] * std_score
+        logger.debug(
+            f"Adaptive threshold ({mode}): {adjusted_threshold:.3f} "
+            f"(mean={mean_score:.3f}, std={std_score:.3f}, max={max_score:.3f})"
+        )
+        return float(adjusted_threshold)
     
     def _find_safe_batch_size(self, 
                             pairs: List[List[str]], 
@@ -116,7 +111,8 @@ class Reranker:
     def rerank(self,
             query: str,
             candidates: List[Tuple[Paragraph, float]],
-            threshold: float = 0.45,
+            threshold: Optional[float] = None,
+            threshold_mode: str = 'medium',
             progress_callback=None,
             query_variations: List[str] = None) -> List[RerankedParagraph]:
         """Rerank candidates using cross-encoder scores.
@@ -124,13 +120,13 @@ class Reranker:
         Args:
             query: The query string.
             candidates: List of (Paragraph, retrieval_score) tuples.
-            threshold: Minimum probability threshold to keep candidates.
+            threshold: Exact custom score threshold; None for adaptive modes.
+            threshold_mode: Adaptive threshold mode or 'custom' for the exact threshold.
             progress_callback: Function(current, total, message) for progress updates.
-            query_variations: List of query paraphrases to average scores over.
+            query_variations: List of query paraphrases.
             
         Returns:
-            List of (Paragraph, retrieval_score, rerank_score) tuples,
-            filtered and sorted by rerank_score descending.
+            List of RerankedParagraph items sorted by rerank_score descending.
         """
         if not candidates:
             return []
@@ -176,31 +172,19 @@ class Reranker:
                 completed_operations += processed_in_batch
                 
                 if progress_callback:
-                    if len(queries_to_use) > 1:
-                        variation_info = (
-                            f"Scoring merged candidates (variation {var_idx + 1}/{len(queries_to_use)})"
-                        )
-                    else:
-                        variation_info = "Scoring merged candidates"
+                    variation_info = f"Paraphrase {var_idx + 1}/{len(queries_to_use)}" if len(queries_to_use) > 1 else ""
                     batch_info = f"Batch {batch_idx + 1}/{num_batches}"
-                    message = f"{variation_info} - {batch_info}"
+                    message = f"{variation_info} - {batch_info}" if variation_info else batch_info
                     progress_callback(completed_operations, total_operations, message)
             
-            raw_scores = np.array(all_scores)
-            
-            # Apply Sigmoid to convert logits to 0-1 probabilities
-            var_probs = 1 / (1 + np.exp(-raw_scores))
+            var_probs = np.asarray(all_scores)
             all_probs_per_variation.append(var_probs)
         
         # Calculate max probabilities across all variations
-        if len(all_probs_per_variation) > 1:
-            probs = np.max(all_probs_per_variation, axis=0)
-            logger.info(f"Using max rerank scores across {len(queries_to_use)} query variations")
-        else:
-            probs = all_probs_per_variation[0]
+        probs = np.max(all_probs_per_variation, axis=0) if len(all_probs_per_variation) > 1 else all_probs_per_variation[0]
         
         # Adapt threshold based on score distribution
-        adjusted_threshold = self.adaptive_rerank_threshold(probs, threshold)
+        adjusted_threshold = self.adaptive_rerank_threshold(probs, threshold, threshold_mode)
         
         # Combine probabilities with candidate data
         # Each item: (paragraph, retrieval_score, rerank_score)
@@ -223,21 +207,15 @@ class Reranker:
         filtered_candidates.sort(key=lambda x: x.rerank_score, reverse=True)
         
         if progress_callback:
-            progress_callback(
-                len(candidates),
-                len(candidates),
-                (
-                    "Reranking complete: "
-                    f"{len(filtered_candidates)} of {len(candidates)} merged candidates passed threshold."
-                ),
-            )
+            progress_callback(len(candidates), len(candidates),
+                            f"Reranking complete: {len(filtered_candidates)} paragraphs passed threshold.")
         
         # Log threshold statistics
-        if adjusted_threshold != threshold:
+        if threshold_mode == 'custom':
             logger.info(f"Reranking: {len(candidates)} -> {len(filtered_candidates)} paragraphs "
-                       f"(base threshold: {threshold:.3f}, adjusted: {adjusted_threshold:.3f})")
+                       f"(custom threshold: {adjusted_threshold:.3f})")
         else:
-            logger.debug(f"Reranking: {len(candidates)} -> {len(filtered_candidates)} "
-                        f"paragraphs passed threshold {threshold:.3f}")
+            logger.info(f"Reranking: {len(candidates)} -> {len(filtered_candidates)} paragraphs "
+                       f"(adaptive mode: {threshold_mode}, threshold: {adjusted_threshold:.3f})")
         
         return filtered_candidates

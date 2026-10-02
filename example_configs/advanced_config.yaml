@@ -28,39 +28,27 @@ questions:
       - "How do transformers work in NLP?"
       - "What is the transformer model?"
     retrieval_threshold: 0.6
+    rerank_mode: custom
     rerank_threshold: 0.3
     highlight_color: [1, 1, 0]  # Yellow
-    question_type: explanation
-    custom_config:
-      qa_score_threshold: 0.15
-      max_answer_length: 200
-      min_answer_words: 3
+    qa_score_threshold: 0.15
   
   # Question 2: Stricter settings for precise answers
   - question: "What learning rate was used?"
     num_paraphrases: 1  # Minimal paraphrasing for factoid questions
     retrieval_threshold: 0.5  # More strict retrieval
+    rerank_mode: custom
     rerank_threshold: 0.4
     highlight_color: [1, 0, 1]  # Pink
-    question_type: factoid
-    custom_config:
-      qa_score_threshold: 0.3  # Only high-confidence answers
-      max_answer_length: 50
-      min_answer_words: 2
-      prefer_entities: true
+    qa_score_threshold: 0.3  # Only high-confidence answers
   
   # Question 3: Lenient settings for exploratory questions
   - question: "What are the main challenges in training large models?"
     num_paraphrases: 3
     retrieval_threshold: 0.8  # Cast wider net
-    rerank_threshold: 0.2
+    rerank_mode: low
     highlight_color: [0, 1, 0]  # Green
-    question_type: methodology
-    custom_config:
-      qa_score_threshold: 0.05  # Accept more answers
-      max_answer_length: 250
-      min_answer_words: 5
-      section_diversity: true
+    qa_score_threshold: 0.05  # Accept more answers
   
   # Question 4: With predefined paraphrases + strict filtering
   - question: "How does BERT differ from GPT?"
@@ -69,13 +57,9 @@ questions:
       - "Compare BERT and GPT architectures"
       - "BERT vs GPT: what are the key distinctions?"
     retrieval_threshold: 0.6
-    rerank_threshold: 0.35
+    rerank_mode: high
     highlight_color: [0, 0.5, 1]  # Blue
-    question_type: comparison
-    custom_config:
-      qa_score_threshold: 0.2
-      max_answer_length: 150
-      prefer_diversity: true
+    qa_score_threshold: 0.2
   
   # Question 5: Using defaults (no overrides)
   - question: "What datasets were used for evaluation?"
@@ -84,11 +68,10 @@ questions:
 # Default settings for all questions
 defaults:
   num_paraphrases: 2
-  retrieval_threshold: 0.7
-  rerank_threshold: 0.25
+  retrieval_threshold: 0.45
+  qa_score_threshold: 0.10
+  rerank_mode: medium
   highlight_color: [1, 1, 0]
-  question_type: general
-  custom_config: null
 
 # Output settings
 create_highlighted_pdfs: true  # Generate highlighted PDFs

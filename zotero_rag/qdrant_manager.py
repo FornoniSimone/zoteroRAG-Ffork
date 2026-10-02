@@ -599,7 +599,7 @@ class QdrantManager:
         if not query_embeddings:
             return []
 
-        result_limit = 30
+        result_limit = 20
         requests = []
         for query_embedding in query_embeddings:
             dense_query = query_embedding.get("dense")
