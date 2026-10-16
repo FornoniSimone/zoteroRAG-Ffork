@@ -586,7 +586,7 @@ def show_setup_tab():
             with st.expander("🗑️ Remove one PDF", expanded=False):
                 pdf_name_to_delete = st.text_input(
                     "PDF name to delete, must be in the given PDF source",
-                    placeholder="example_paper.pdf",
+                    placeholder="example_paper",
                     key="pdf_name_delete"
                 )
                 if st.button("Delete PDF", width="stretch", key="btn_delete_pdf"):
@@ -698,22 +698,22 @@ def show_search_tab():
 
     selected_threshold_preset = st.session_state.selected_threshold_preset
     rerank_mode = selected_threshold_preset
-    paraphrases_to_generate = 2
+    paraphrases_to_generate = 4
     if selected_threshold_preset == 'custom':
         col_retrieval, col_rerank, col_qa = st.columns(3)
         with col_retrieval:
             retrieval_threshold = st.number_input(
-                "Soglia Retrieve", min_value=0.0, max_value=1.0,
+                "Retrieve Threshold", min_value=0.0, max_value=1.0,
                 value=0.45, step=0.01, key="custom_retrieval_threshold"
             )
         with col_rerank:
             rerank_threshold = st.number_input(
-                "Soglia Rerank", min_value=0.0, max_value=1.0,
+                "Rerank Threshold", min_value=0.0, max_value=1.0,
                 value=0.45, step=0.01, key="custom_rerank_threshold"
             )
         with col_qa:
             qa_score_threshold = st.number_input(
-                "Soglia QA", min_value=0.0, max_value=1.0,
+                "QA Confidence Threshold", min_value=0.0, max_value=1.0,
                 value=0.10, step=0.01, key="custom_qa_score_threshold"
             )
     else:
@@ -758,6 +758,17 @@ def show_search_tab():
             st.session_state.paraphrase_selected = set()
         if 'paraphrase_query' not in st.session_state:
             st.session_state.paraphrase_query = None
+
+        def _clear_paraphrase_widget_state():
+            for key in list(st.session_state.keys()):
+                if key.startswith(('para_check_', 'para_edit_')):
+                    del st.session_state[key]
+
+        if st.session_state.paraphrase_query != query:
+            _clear_paraphrase_widget_state()
+            st.session_state.paraphrase_candidates = []
+            st.session_state.paraphrase_selected = set()
+            st.session_state.paraphrase_query = query
         
         # Generate paraphrases button
         col_gen, col_more = st.columns([1, 1])
@@ -766,15 +777,15 @@ def show_search_tab():
             if st.button("🔄 Generate Paraphrases", width="stretch"):
                 if st.session_state.rag and st.session_state.rag.qa_engine.paraphraser:
                     with st.spinner("Generating paraphrases..."):
+                        _clear_paraphrase_widget_state()
                         variations = st.session_state.rag.qa_engine.expand_question(
-                            query, 
-                            num_variations=paraphrases_to_generate * 2  # Generate more for selection
+                            query,
+                            num_variations=paraphrases_to_generate
                         )
                         # Store candidates (excluding original)
                         st.session_state.paraphrase_candidates = variations[1:]
                         st.session_state.paraphrase_query = query
-                        # Auto-select first N paraphrases
-                        st.session_state.paraphrase_selected = set(range(min(paraphrases_to_generate, len(variations) - 1)))
+                        st.session_state.paraphrase_selected = set()
                         st.rerun()
                 else:
                     st.error("Paraphraser not available. Question expansion is disabled.")
@@ -785,6 +796,17 @@ def show_search_tab():
                 st.button("➕ Generate More", width="stretch")):
                 if st.session_state.rag and st.session_state.rag.qa_engine.paraphraser:
                     with st.spinner("Generating more paraphrases..."):
+                        selected_indices = set()
+                        for i, existing in enumerate(st.session_state.paraphrase_candidates):
+                            check_key = f"para_check_{i}"
+                            edit_key = f"para_edit_{i}"
+                            if st.session_state.get(check_key, i in st.session_state.paraphrase_selected):
+                                selected_indices.add(i)
+                            edited = st.session_state.get(edit_key)
+                            if edited is not None:
+                                st.session_state.paraphrase_candidates[i] = edited
+                        st.session_state.paraphrase_selected = selected_indices
+
                         # Generate additional paraphrases
                         more_variations = st.session_state.rag.qa_engine.expand_question(
                             query, 
@@ -845,8 +867,6 @@ def show_search_tab():
             st.markdown(f"**Selected:** {len(selected_indices)} paraphrase(s) + original question")
         elif not st.session_state.paraphrase_candidates:
             st.info("👆 Click 'Generate Paraphrases' to create question variations")
-        elif st.session_state.paraphrase_query != query:
-            st.warning("⚠️ Question changed. Click 'Generate Paraphrases' to update.")
     
     st.markdown("---")
     col_search, col_clear = st.columns([1, 4])
@@ -940,7 +960,6 @@ def show_search_tab():
                 rerank_mode=rerank_mode,
                 progress_callback=qa_callback,
                 rerank_callback=rerank_callback,
-                num_paraphrases=0,
                 question_variations=selected_paraphrases
             )
 

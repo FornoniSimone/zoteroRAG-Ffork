@@ -269,7 +269,7 @@ class QAEngine:
             qa_score_threshold: Minimum confidence score to keep an answer.
             color: Highlight color for the answer (R, G, B).
             progress_callback: Optional callback for progress updates (batch_idx, total_batches, message).
-            question_variations: Optional list of question variations to use instead of generating them.
+            question_variations: List of question variations to use
             
         Returns:
             List of Answer objects extracted from the candidates.

@@ -10,7 +10,7 @@ A question-answering system for your uploaded PDFs or Zotero library featuring a
 - GROBID sentence-level parsing with coordinates for precise PDF highlighting
 - Dense + Sparse retrieval with Qdrant hybrid search
 - Chunk contextualization via Ollama before embedding (optional)
-- Question expansion via automatic paraphrasing for improved recall
+- Optional question paraphrases generated on request and included only when selected
 - Three adaptive rerank threshold presets plus manual custom thresholds
 - Sliding window QA for answers spanning paragraph boundaries
 - Multi-color highlighting for multiple queries
@@ -172,7 +172,8 @@ Then navigate to `http://localhost:8501`
 
 3. **Question Expansion** (Optional)
    - Generate paraphrases to improve retrieval
-    - Select/edit which generated variations to use; the original question is always included
+    - Select/edit generated variations; none are selected by default, and the original question is always included
+    - If no paraphrase is generated or selected, only the original question is searched
    - Automatically merges results from all variations
 
 4. **Search & Navigate**
@@ -220,6 +221,7 @@ Qdrant Hybrid Index
 User Question
     ↓
 Question Expansion (optional paraphrasing)
+Only generated and explicitly selected paraphrases are included; otherwise the original question is used.
     ↓
 Qdrant Hybrid Retrieval (dense + sparse, all variations)
     ↓

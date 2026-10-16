@@ -29,7 +29,6 @@ create_highlighted_pdfs: true
 
 # Default settings for all questions (can be overridden per question)
 defaults:
-  num_paraphrases: 2
   retrieval_threshold: 0.45
   qa_score_threshold: 0.10
   rerank_mode: medium
@@ -38,7 +37,6 @@ defaults:
 # Questions to answer
 questions:
   - question: "What is the main contribution of this work?"
-    num_paraphrases: 2
     highlight_color: [1, 1, 0]  # yellow
   
   - question: "What methodology was used?"

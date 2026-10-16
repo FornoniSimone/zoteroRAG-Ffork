@@ -58,9 +58,6 @@ rebuild_index: false
 # ============================================================================
 
 defaults:
-  # Number of question paraphrases to auto-generate (0 = disabled)
-  num_paraphrases: 2
-  
   # Retrieval similarity threshold
   retrieval_threshold: 0.45
   
@@ -87,7 +84,6 @@ questions:
     retrieval_threshold: 0.6
     rerank_mode: custom
     rerank_threshold: 0.3
-    num_paraphrases: 3
     highlight_color: [0, 1, 0]  # Green
   
   # Example 3: Question with pre-defined paraphrases
@@ -103,7 +99,6 @@ questions:
     retrieval_threshold: 0.5
     rerank_mode: custom
     rerank_threshold: 0.4
-    num_paraphrases: 1
     highlight_color: [1, 0, 1]  # Pink
     qa_score_threshold: 0.3
 

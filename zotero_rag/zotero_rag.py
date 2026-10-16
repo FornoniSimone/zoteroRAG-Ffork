@@ -576,7 +576,6 @@ class ZoteroRAG:
                     rerank_mode: str = 'medium',
                     progress_callback=None, 
                     rerank_callback=None,
-                    num_paraphrases: int = 2,
                     highlight_color: Tuple[float, float, float] = None,
                     question_variations: List[str] = None) -> List[Answer]:
         """Answer a question using the full RAG pipeline.
@@ -594,23 +593,17 @@ class ZoteroRAG:
             rerank_mode: Adaptive rerank mode ('low', 'medium', 'high') or 'custom'.
             progress_callback: Function(current, total, message) for QA progress.
             rerank_callback: Function(current, total, message) for rerank progress.
-            num_paraphrases: Number of question paraphrases to generate (0 = disabled).
             highlight_color: RGB tuple (0-1) for highlighting. If None, use query-based color.
-            question_variations: Pre-generated question variations to use. If None, generate them.
+            question_variations: Selected question variations; only the original query is used if omitted.
             
         Returns:
             List of Answer objects, deduplicated and sorted by score.
         """
-        # Stage 0: Expand question if enabled and variations not provided
-        if question_variations is None:
-            question_variations = [question]  # Always include original
-            if self.qa_engine.enable_question_expansion and num_paraphrases > 0:
-                question_variations = self.qa_engine.expand_question(question, num_variations=num_paraphrases)
-                logger.info(f"Question expansion: {len(question_variations)} variations generated")
-            elif num_paraphrases == 0:
-                logger.info("Question paraphrasing disabled by user")
-        else:
-            logger.info(f"Using {len(question_variations)} pre-selected question variations")
+        # Stage 0: Use only variations explicitly selected by the caller.
+        question_variations = list(question_variations or [question])
+        if question not in question_variations:
+            question_variations.insert(0, question)
+        logger.info(f"Using {len(question_variations) - 1} selected paraphrases")
         
         # Stage 1: Retrieve candidate paragraphs (Qdrant)
         # Search with all question variations and merge results

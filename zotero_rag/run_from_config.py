@@ -35,7 +35,6 @@ def load_config(config_path: str) -> Dict[str, Any]:
     
     # Set defaults
     config.setdefault('defaults', {})
-    config['defaults'].setdefault('num_paraphrases', 2)
     config['defaults'].setdefault('retrieval_threshold', 0.45)
     config['defaults'].setdefault('qa_score_threshold', 0.10)
     if 'rerank_mode' not in config['defaults']:
@@ -165,7 +164,6 @@ def run_from_config(config_path: str) -> Dict[str, List[Answer]]:
         logger.info(f"Processing question {i+1}/{len(questions)}: {question}")
         
         # Get question-specific settings or use defaults
-        num_paraphrases = question_config.get('num_paraphrases', defaults['num_paraphrases'])
         retrieval_threshold = question_config.get('retrieval_threshold', defaults['retrieval_threshold'])
         qa_score_threshold = question_config.get('qa_score_threshold', defaults['qa_score_threshold'])
         highlight_color = question_config.get('highlight_color', defaults['highlight_color'])
@@ -195,7 +193,6 @@ def run_from_config(config_path: str) -> Dict[str, List[Answer]]:
             qa_score_threshold=qa_score_threshold,
             rerank_threshold=rerank_threshold,
             rerank_mode=rerank_mode,
-            num_paraphrases=num_paraphrases,
             highlight_color=highlight_color,
             question_variations=question_variations
         )

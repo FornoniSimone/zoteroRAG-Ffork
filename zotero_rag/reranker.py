@@ -50,7 +50,7 @@ class Reranker:
                 raise ValueError("A rerank threshold is required in custom mode")
             return base_threshold
 
-        std_multipliers = {'low': -2, 'medium': -1, 'high': 2}
+        std_multipliers = {'low': -2, 'medium': -1, 'high': 1}
         if mode not in std_multipliers:
             raise ValueError(f"Unsupported rerank threshold mode: {mode}")
 

@@ -35,7 +35,6 @@ questions:
   
   # Question 2: Stricter settings for precise answers
   - question: "What learning rate was used?"
-    num_paraphrases: 1  # Minimal paraphrasing for factoid questions
     retrieval_threshold: 0.5  # More strict retrieval
     rerank_mode: custom
     rerank_threshold: 0.4
@@ -44,7 +43,6 @@ questions:
   
   # Question 3: Lenient settings for exploratory questions
   - question: "What are the main challenges in training large models?"
-    num_paraphrases: 3
     retrieval_threshold: 0.8  # Cast wider net
     rerank_mode: low
     highlight_color: [0, 1, 0]  # Green
@@ -67,7 +65,6 @@ questions:
 
 # Default settings for all questions
 defaults:
-  num_paraphrases: 2
   retrieval_threshold: 0.45
   qa_score_threshold: 0.10
   rerank_mode: medium
