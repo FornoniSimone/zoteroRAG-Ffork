@@ -169,7 +169,6 @@ Then navigate to `http://localhost:8501`
     - **Custom**: Manually set Retrieve, Rerank, and QA thresholds.
     - QA threshold is 0.10 for the three presets.
 
-
 3. **Question Expansion** (Optional)
    - Generate paraphrases to improve retrieval
     - Select/edit generated variations; none are selected by default, and the original question is always included
